@@ -1,14 +1,20 @@
 # LinkedIn Job Clipper
 
-Minimal Chrome/Edge extension for saving the currently open LinkedIn job posting to the local `ai-job-search` intake server.
+Minimal Chrome/Edge extension for saving the currently open LinkedIn job posting to a configured `ai-job-search` service endpoint.
 
 ## What It Does
 
 - Runs only when the user opens the extension popup.
 - Captures visible fields from the current LinkedIn job page.
 - Shows a preview before saving.
-- Sends one JSON object to `http://localhost:3927/jobs/capture`.
-- Stores nothing in browser storage.
+- Sends one JSON object to `<configured-service-base-url>/jobs/capture`.
+- Supports per-browser saved settings for service base URL and API key.
+- Stores only local extension settings (service URL and API key) in browser extension storage.
+
+The extension stores only two local settings in browser extension storage:
+
+- Service Base URL (for example `http://192.168.0.72:3927` or `https://raspberry-pi.<tailnet>.ts.net`)
+- API key used as `X-API-Key` header for mutating endpoints.
 
 Captured fields:
 
@@ -35,6 +41,24 @@ Captured fields:
 - No AI/model calls.
 - No application submission.
 
+## Configure Endpoint and API Key
+
+Before saving jobs, open the extension popup and set:
+
+1. **Service Base URL**
+2. **API Key (X-API-Key)**
+3. Click **Save Settings**
+
+Examples:
+
+```text
+LAN:      http://192.168.0.72:3927
+Tailnet:  https://raspberry-pi.<tailnet-name>.ts.net
+Local:    http://localhost:3927
+```
+
+If `APP_API_KEY` is set on the service host, the API key field is required for saving jobs.
+
 ## Start The Local Intake Server
 
 From the repository root:
@@ -43,7 +67,7 @@ From the repository root:
 python scripts\job_intake_server.py
 ```
 
-The server binds to localhost only:
+The simple intake server binds to localhost only:
 
 ```text
 http://127.0.0.1:3927
@@ -79,12 +103,15 @@ extensions/linkedin-job-clipper/
 
 ## Test The Flow
 
-1. Start the local intake server.
+1. Start the local intake server or run the full service container.
 2. Open one LinkedIn job posting manually.
 3. Click the LinkedIn Job Clipper extension icon.
-4. Review the captured title, company, location, description character count, and URL.
-5. Click **Save Local Job**.
-6. Confirm a JSON file appears in:
+4. Set **Service Base URL** and **API Key**, then click **Save Settings**.
+5. Review the captured title, company, location, description character count, and URL.
+6. Click **Save Job**.
+7. Confirm the service reports a successful save.
+
+For the simple localhost intake server, confirm a JSON file appears in:
 
 ```text
 job_intake/captured_jobs/
@@ -102,9 +129,9 @@ LinkedIn changes DOM structure often, so `content.js` tries several selector fam
 
 If required fields are missing, the popup disables saving and shows which fields were not captured.
 
-## Localhost CORS
+## CORS and Permissions
 
-The intake server allows extension origins such as:
+The simple intake server allows extension origins such as:
 
 ```text
 chrome-extension://...
@@ -113,3 +140,5 @@ moz-extension://...
 ```
 
 It does not use a wide-open `*` CORS policy.
+
+The extension itself declares broad `http` and `https` host permissions so one build can target local, LAN, or tailnet endpoints without editing source files between environments.

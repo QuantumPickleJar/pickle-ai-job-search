@@ -107,7 +107,86 @@ Ollama may need to listen on a private interface so the Pi can reach it. Do not 
 - Optionally, Chrome or Microsoft Edge with the LinkedIn clipper loaded unpacked.
 - Permission to access the protected Pi service.
 
-The remote extension target will need to be configurable in a later Phase 3 prompt. The current Phase 2 extension targets `http://localhost:3927`.
+## Client Setup (LAN First, Then Tailnet)
+
+Use this sequence to get a client browser connected quickly on LAN, then move to private tailnet access.
+
+### 1. LAN mode (quick start)
+
+On the service host `.env`:
+
+```env
+APP_HOST=<PI_LAN_ADDRESS>
+APP_PORT=3927
+ENABLE_REMOTE_MODE=true
+```
+
+Then recreate the service:
+
+```bash
+docker compose -f docker-compose.service.yml --env-file .env up -d --force-recreate ai-job-service
+```
+
+From a client device on the same LAN, open:
+
+```text
+http://<PI_LAN_ADDRESS>:3927/ui
+```
+
+For extension-based capture, load the unpacked extension from:
+
+```text
+extensions/linkedin-job-clipper/
+```
+
+In the extension popup settings:
+
+- Service Base URL: `http://<PI_LAN_ADDRESS>:3927`
+- API Key: your `APP_API_KEY` from the service host `.env`
+
+Then save a LinkedIn job with the popup.
+
+### 2. Tailnet mode (recommended steady state)
+
+Join the Pi, Windows Ollama workstation, and client device to the same tailnet.
+
+On the service host `.env`:
+
+```env
+APP_HOST=127.0.0.1
+APP_PORT=3927
+OLLAMA_BASE_URL=http://<WINDOWS_TAILSCALE_ADDRESS>:11434
+ENABLE_REMOTE_MODE=true
+```
+
+Recreate the service:
+
+```bash
+docker compose -f docker-compose.service.yml --env-file .env up -d --force-recreate ai-job-service
+```
+
+Enable private Tailscale Serve on the Pi:
+
+```bash
+sudo tailscale serve --bg 3927
+sudo tailscale serve status
+```
+
+Update the extension popup settings:
+
+- Service Base URL: `https://<pi-host>.<tailnet>.ts.net`
+- API Key: unchanged, unless rotated
+
+Or use the web UI directly at the same tailnet URL plus `/ui`.
+
+### 3. Client verification checklist
+
+- `GET /health` succeeds from the client route you are using (LAN or tailnet).
+- UI dashboard opens and job submission page is reachable.
+- Extension save shows a successful response.
+- Captured job appears in the UI jobs list.
+
+For extension-specific setup and behavior, see [`extensions/linkedin-job-clipper/README.md`](extensions/linkedin-job-clipper/README.md).
 
 ## Prepare the Repository
 
