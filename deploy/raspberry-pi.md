@@ -145,13 +145,92 @@ ollama list
 curl.exe http://localhost:11434/api/tags
 ```
 
-Ollama must listen on a private interface reachable from the Pi. Restrict Windows Firewall port `11434` to:
+### Make Ollama listen on the private LAN interface
 
-- the Pi's private IP;
-- a narrow trusted LAN subnet; or
-- the Tailscale interface/address used by the Pi.
+By default Ollama only binds to `127.0.0.1:11434`, so the Pi cannot reach it. Set the `OLLAMA_HOST` environment variable before starting Ollama.
 
-Use one of these private service configurations:
+**Option A — for the current PowerShell session only:**
+
+```powershell
+$env:OLLAMA_HOST = "0.0.0.0:11434"
+ollama serve
+```
+
+**Option B — persistent system environment variable (survives reboots):**
+
+```powershell
+[System.Environment]::SetEnvironmentVariable("OLLAMA_HOST", "0.0.0.0:11434", "Machine")
+```
+
+Restart the Ollama process (or the Ollama Windows service if it is running as a service) after setting the variable.
+
+Verify Ollama is now listening on the LAN interface by finding the Windows workstation's private IP and testing locally:
+
+```powershell
+# Find private LAN address
+Get-NetIPAddress -AddressFamily IPv4 |
+  Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' } |
+  Select-Object InterfaceAlias, IPAddress
+
+# Confirm Ollama answers on that address (replace with your actual IP)
+curl.exe http://192.168.1.50:11434/api/tags
+```
+
+The private IP reported here is the value to use for `OLLAMA_BASE_URL` in the Pi's `.env`.
+
+> **Note:** `0.0.0.0` makes Ollama listen on all interfaces. The Windows Firewall rule below scopes which machines can actually connect.
+
+### Add a Windows Firewall inbound rule
+
+Open PowerShell as Administrator and run the command for your chosen network boundary. Substitute the actual Pi IP or subnet.
+
+**Scope to a single Pi IP (most restrictive — recommended):**
+
+```powershell
+New-NetFirewallRule `
+  -DisplayName "Ollama - Pi only" `
+  -Direction Inbound `
+  -Protocol TCP `
+  -LocalPort 11434 `
+  -RemoteAddress 192.168.1.20 `
+  -Action Allow
+```
+
+**Scope to a trusted LAN subnet:**
+
+```powershell
+New-NetFirewallRule `
+  -DisplayName "Ollama - trusted LAN" `
+  -Direction Inbound `
+  -Protocol TCP `
+  -LocalPort 11434 `
+  -RemoteAddress 192.168.1.0/24 `
+  -Action Allow
+```
+
+**Scope to Tailscale only** (if using Tailscale instead of LAN):
+
+```powershell
+New-NetFirewallRule `
+  -DisplayName "Ollama - Tailscale" `
+  -Direction Inbound `
+  -Protocol TCP `
+  -LocalPort 11434 `
+  -RemoteAddress 100.64.0.0/10 `
+  -Action Allow
+```
+
+Verify the rule exists:
+
+```powershell
+Get-NetFirewallRule -DisplayName "Ollama*" |
+  Get-NetFirewallAddressFilter |
+  Select-Object RemoteAddress
+```
+
+Never create a rule with `RemoteAddress Any` for port `11434`, and never forward this port through a router or tunnel.
+
+Use one of these private service configurations in the Pi's `.env`:
 
 ```env
 # Trusted LAN
