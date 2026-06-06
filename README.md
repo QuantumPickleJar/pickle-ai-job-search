@@ -28,7 +28,76 @@ files ready    with fit ratings     (LaTeX, tailored)
 
 The framework encodes career guidance best practices, including structured evaluation criteria, forward-looking cover letter framing, and optional salary benchmarking.
 
+## Phase 2 local-first workflow
+
+This fork includes a Windows 11-friendly local workflow for capturing one job posting, scoring it with Ollama, and preparing an editable application workspace. The default Phase 2 path uses only localhost services and does not require a paid model API.
+
+### Windows and Ollama setup
+
+From PowerShell:
+
+```powershell
+winget install Ollama.Ollama
+ollama pull qwen2.5:14b
+python scripts\ollama_smoke_test.py
+```
+
+The default model is `qwen2.5:14b`. To select another installed model for the current PowerShell session:
+
+```powershell
+$env:OLLAMA_MODEL = "llama3.1:8b"
+python scripts\ollama_smoke_test.py
+```
+
+### Validate and score a captured job
+
+```powershell
+python scripts\validate_job.py job_intake\examples\sample-dotnet-developer-job.json
+python scripts\score_fit.py job_intake\examples\sample-dotnet-developer-job.json
+```
+
+Fit scoring reads verified facts from `profile\resume_facts.md` and claim restrictions from `profile\disallowed_claims.md`. Review and correct those files before using generated advice for a real application.
+
+### Create an application workspace
+
+```powershell
+python scripts\apply_from_file.py job_intake\examples\sample-dotnet-developer-job.json
+```
+
+This writes reviewable job, fit-analysis, resume-targeting, cover-letter-notes, and checklist files under `applications\`. It does not create final PDFs or submit an application.
+
+### Run local job intake
+
+```powershell
+python scripts\job_intake_server.py
+```
+
+The server listens only on `127.0.0.1:3927` and saves normalized JSON files under `job_intake\captured_jobs\`. Stop it with `Ctrl+C`.
+
+### Load the LinkedIn clipper
+
+See [`extensions/linkedin-job-clipper/README.md`](extensions/linkedin-job-clipper/README.md) for Chrome and Microsoft Edge installation instructions. The extension operates only after a manual click, previews one currently open LinkedIn job, and sends it only to the localhost intake server.
+
+It intentionally does not crawl search results, capture jobs in bulk, automate Easy Apply, scrape profiles/recruiters/contacts, extract login data, message people, or submit applications.
+
+### Run acceptance checks
+
+```powershell
+python scripts\run_acceptance_tests.py
+```
+
+Folder and schema checks always run. Ollama-dependent checks are reported as skipped when the local server is unavailable. Generated acceptance-test output is confined to a temporary directory.
+
+### Privacy notes
+
+- Do not put API keys, private addresses, phone numbers, or other secrets in committed files.
+- `.env` files, captured job JSON, and generated application workspaces are ignored by Git.
+- The committed sample job uses a placeholder company and is not a real posting.
+- Model output is advisory. Verify every claim before using it in application materials.
+
 ## Prerequisites
+
+The Phase 2 local-first commands above require Python 3.10+ and Ollama. The broader upstream workflow uses the additional tools below.
 
 - [Claude Code](https://claude.com/claude-code) (CLI)
 - Python 3.10+

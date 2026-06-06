@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LinkedIn Job Clipper</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Arial, sans-serif;
+        font-size: 13px;
+        color: #1f2933;
+      }
+
+      body {
+        width: 360px;
+        margin: 0;
+        padding: 14px;
+        background: #f7f9fb;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 16px;
+        line-height: 1.25;
+      }
+
+      .field {
+        margin: 0 0 10px;
+      }
+
+      .label {
+        display: block;
+        margin-bottom: 3px;
+        color: #52606d;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .value {
+        min-height: 18px;
+        overflow-wrap: anywhere;
+        line-height: 1.35;
+      }
+
+      .status {
+        margin: 10px 0;
+        padding: 8px;
+        border: 1px solid #d9e2ec;
+        background: #fff;
+        line-height: 1.35;
+      }
+
+      .status.error {
+        border-color: #f5b7b1;
+        color: #8a1f11;
+        background: #fff5f3;
+      }
+
+      .status.success {
+        border-color: #a7d7c5;
+        color: #0f5132;
+        background: #f0fff7;
+      }
+
+      button {
+        width: 100%;
+        min-height: 34px;
+        border: 0;
+        background: #0a66c2;
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        background: #9fb3c8;
+        cursor: default;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>LinkedIn Job Clipper</h1>
+
+    <div class="field">
+      <span class="label">Title</span>
+      <div id="title" class="value">Capturing...</div>
+    </div>
+
+    <div class="field">
+      <span class="label">Company</span>
+      <div id="company" class="value">Capturing...</div>
+    </div>
+
+    <div class="field">
+      <span class="label">Location</span>
+      <div id="location" class="value">Capturing...</div>
+    </div>
+
+    <div class="field">
+      <span class="label">Description Characters</span>
+      <div id="descriptionCount" class="value">0</div>
+    </div>
+
+    <div class="field">
+      <span class="label">Source URL</span>
+      <div id="sourceUrl" class="value">Capturing...</div>
+    </div>
+
+    <div id="status" class="status">Open a LinkedIn job page, then use this popup to preview and save it locally.</div>
+
+    <button id="saveButton" type="button" disabled>Save Local Job</button>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

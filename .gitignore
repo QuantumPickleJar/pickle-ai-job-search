@@ -2,6 +2,11 @@
 node_modules/
 bun.lock
 
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
 # Python
 __pycache__/
 *.pyc
@@ -61,6 +66,15 @@ documents/applications/**
 
 # Personal job search tracking
 job_search_tracker.csv
+
+# Local-first captured and generated data
+job_intake/captured_jobs/*.json
+job_intake/processed_jobs/*.json
+job_intake/rejected_jobs/*.json
+applications/**/*.json
+applications/**/*.md
+applications/**/generated/**
+applications/**/fit-analysis.raw.txt
 
 # Upskill reports (personal output)
 upskill/*.md
