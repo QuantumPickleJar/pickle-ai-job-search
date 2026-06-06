@@ -68,6 +68,7 @@ documents/applications/**
 job_search_tracker.csv
 
 # Local-first captured and generated data
+data/
 job_intake/captured_jobs/*.json
 job_intake/processed_jobs/*.json
 job_intake/rejected_jobs/*.json

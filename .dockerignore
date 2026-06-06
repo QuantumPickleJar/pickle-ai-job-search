@@ -1,0 +1,15 @@
+.git/
+.env
+.env.*
+**/.env
+**/.env.*
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+node_modules/
+applications/
+data/
+job_intake/captured_jobs/
+job_intake/processed_jobs/
+job_intake/rejected_jobs/
+documents/
