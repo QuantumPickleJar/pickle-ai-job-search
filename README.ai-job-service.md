@@ -128,19 +128,47 @@ Never commit `.env`, API keys, tunnel credentials, VPN keys, or Access tokens.
 
 See [`deploy/raspberry-pi.md`](deploy/raspberry-pi.md) for complete Pi setup, storage permissions, networking, and first-start verification.
 
-For guided setup:
+### Wizard-First Setup
+
+Run the setup wizard on each machine before starting the service. It configures `.env`, creates data directories, and checks prerequisites for the chosen role. Run `--diagnostics` at any time to verify the current state without modifying files.
+
+#### Windows model runner
+
+```powershell
+python scripts/setup_wizard.py --role model-runner
+```
+
+Detects Ollama, lists installed models, recommends `qwen2.5:14b`, and reports the private address to use as `OLLAMA_BASE_URL` on the Pi.
+
+#### Raspberry Pi service host
+
+```bash
+python scripts/setup_wizard.py --role service-host
+docker compose -f docker-compose.service.yml --env-file .env up -d --build
+```
+
+Creates or updates `.env`, sets `PUID`/`PGID`, creates persistent data directories, and tests Ollama connectivity. Then bring the service up.
+
+#### All-in-one local / dev
+
+```bash
+python scripts/setup_wizard.py --role all-in-one
+```
+
+Configures local Ollama at `http://localhost:11434`, sets `APP_HOST=127.0.0.1`, and creates data directories for a single-machine setup.
+
+#### Diagnostics
+
+```bash
+python scripts/setup_wizard.py --diagnostics
+```
+
+Reports OS, Docker, Compose, Ollama, model presence, data-directory state, and service health. Never writes files.
+
+For guided interactive setup without specifying a role:
 
 ```bash
 python scripts/setup_wizard.py
-```
-
-Direct role commands:
-
-```bash
-python scripts/setup_wizard.py --role model-runner
-python scripts/setup_wizard.py --role service-host
-python scripts/setup_wizard.py --role all-in-one
-python scripts/setup_wizard.py --diagnostics
 ```
 
 ## Environment Configuration
@@ -619,6 +647,19 @@ Before using any generated material:
 
 Local model output is advisory even when it is valid JSON. Human review is mandatory.
 
+## Acceptance Tests
+
+Run the Phase 3 service and setup-wizard acceptance suite from the repository root:
+
+```bash
+python scripts/run_phase3_acceptance_tests.py
+```
+
+The suite starts the service on a random localhost port, writes only to temporary directories,
+and uses a local fake Ollama endpoint to verify both reachable and unreachable behavior. It does
+not require Docker, a Raspberry Pi, public internet, Tailscale, Cloudflare, or a running Ollama
+installation. Docker and real Ollama availability remain diagnostics reported by the setup wizard.
+
 ## What Comes Next
 
-The next Phase 3 work should add deployment acceptance tests for Compose rendering, container health, mounted-data persistence, service/API reachability, and queued processing behavior.
+The final Phase 3 prompt can build on this tested service, wizard, and deployment baseline.
