@@ -516,6 +516,9 @@ def masked_value(key: str, value: str) -> str:
 
 def write_report(root: Path, result: SetupResult, dry_run: bool) -> None:
     if dry_run:
+        print("[DRY-RUN] Planned environment values:")
+        for key, value in sorted(result.values_written.items()):
+            print(f"- {key}={masked_value(key, value)}")
         print("[DRY-RUN] Setup report was not written.")
         return
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
