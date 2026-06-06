@@ -28,6 +28,43 @@ files ready    with fit ratings     (LaTeX, tailored)
 
 The framework encodes career guidance best practices, including structured evaluation criteria, forward-looking cover letter framing, and optional salary benchmarking.
 
+## Documentation Index
+
+### Getting started
+
+| Document | When to read it |
+|---|---|
+| [README.md](README.md) | **Start here.** Project overview, Phase 2 local workflow, quick start. |
+| [SETUP.md](SETUP.md) | Detailed Claude Code + Bun + LaTeX prerequisite setup. |
+| [AGENTS.md](AGENTS.md) / [CLAUDE.md](CLAUDE.md) | Candidate profile and AI assistant workflow rules (Codex / Claude variants). |
+
+### Phase 3 service
+
+| Document | When to read it |
+|---|---|
+| [README.ai-job-service.md](README.ai-job-service.md) | Service overview, wizard-first setup, environment config, API usage, web UI. |
+| [deploy/raspberry-pi.md](deploy/raspberry-pi.md) | Raspberry Pi OS installation, Docker, storage permissions, first start. |
+| [docs/service-runbook.md](docs/service-runbook.md) | Day-to-day operation: start/stop, key rotation, UID/GID, backups, recovery. |
+| [docs/remote-access.md](docs/remote-access.md) | LAN, Tailscale, Cloudflare Tunnel, and VPN access options. |
+| [docs/phase-3-setup-wizard-design.md](docs/phase-3-setup-wizard-design.md) | Wizard role contract, configuration behaviour, and `.env` management rules. |
+| [docs/phase-3-service-architecture.md](docs/phase-3-service-architecture.md) | Architecture, trust boundaries, component responsibilities, networking design. |
+
+### Tools and extensions
+
+| Document | When to read it |
+|---|---|
+| [extensions/linkedin-job-clipper/README.md](extensions/linkedin-job-clipper/README.md) | Chrome/Edge LinkedIn clipper installation and single-job capture. |
+| [tools/README_SALARY_TOOL.md](tools/README_SALARY_TOOL.md) | Salary benchmarking tool setup and data format. |
+| [documents/README.md](documents/README.md) | Career source-documents folder layout for `/setup` Path A and `/expand`. |
+
+### Technical design reference (`docs/`)
+
+Design-decision and implementation-contract documents. Most users do not need to read these; useful when troubleshooting or contributing.
+
+`00-project-constraints` · `01-windows-local-runtime` · `02-model-provider-abstraction` · `03-local-job-intake` · `04-linkedin-one-click-clipper` · `05-job-posting-schema` · `06-local-fit-scoring` · `07-apply-from-file-workflow` · `08-document-curation-pack` · `09-cloud-to-local-migration` · `10-acceptance-tests`
+
+---
+
 ## Phase 2 local-first workflow
 
 This fork includes a Windows 11-friendly local workflow for capturing one job posting, scoring it with Ollama, and preparing an editable application workspace. The default Phase 2 path uses only localhost services and does not require a paid model API.

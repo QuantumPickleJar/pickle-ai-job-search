@@ -29,6 +29,49 @@ docker compose -f docker-compose.service.yml --env-file .env config --quiet
 
 Do not publish the full rendered Compose output in an issue because it may contain environment values.
 
+## Wizard Operations
+
+### When to Run the Wizard
+
+Run the wizard on a machine when:
+
+- performing a fresh clone;
+- setting up a new role (model runner, service host, or all-in-one);
+- a `.env` file does not yet exist;
+- `PUID`, `PGID`, or `OLLAMA_BASE_URL` needs to be reconfigured; or
+- verifying the deployment state before a support request.
+
+Run diagnostics at any time to inspect current state without modifying files:
+
+```bash
+python3 scripts/setup_wizard.py --diagnostics
+```
+
+Diagnostics are safe to run on a live service.
+
+### Re-running the Wizard Safely
+
+The wizard updates known keys in `.env` without deleting unknown values or comments. It is safe to re-run:
+
+```bash
+python3 scripts/setup_wizard.py --role service-host
+```
+
+Preview changes without writing files:
+
+```bash
+python3 scripts/setup_wizard.py --role service-host --dry-run
+```
+
+After re-running a mutating role, compare `.env` with its previous state before restarting the service:
+
+```bash
+git diff .env  # will show nothing because .env is gitignored; use a manual diff instead
+diff -u .env.example .env
+```
+
+Never replace `.env` wholesale. A full overwrite discards `APP_API_KEY` and machine-specific network settings.
+
 ## Start, Stop, and Restart
 
 Start or reconcile the service:
@@ -248,7 +291,175 @@ Verify a mutating endpoint with the new key from an authorized client. Then upda
 
 Rotating `APP_API_KEY` does not replace Tailscale policy or Cloudflare Access. The application key protects mutating actions; the secure access layer must protect the entire service when it is remotely reachable.
 
-## Common Failures
+## Change OLLAMA_BASE_URL
+
+Use this procedure when the Windows workstation changes IP address, you switch from LAN to Tailscale (or vice versa), or you replace the workstation.
+
+Back up data first (see **Back Up Data**).
+
+Open `.env` and update `OLLAMA_BASE_URL`:
+
+```bash
+# Private LAN example
+OLLAMA_BASE_URL=http://192.168.1.50:11434
+
+# Tailscale example
+OLLAMA_BASE_URL=http://100.x.y.z:11434
+```
+
+Do not use a public hostname, public IP, or Cloudflare Tunnel URL for `OLLAMA_BASE_URL`. Ollama must remain on the private network.
+
+Recreate the service so it reads the new value:
+
+```bash
+docker compose -f docker-compose.service.yml --env-file .env up -d --force-recreate ai-job-service
+```
+
+Verify connectivity:
+
+```bash
+curl --fail http://127.0.0.1:3927/health/ollama
+```
+
+## Switch from Local-Only to LAN Mode
+
+The default `APP_HOST=127.0.0.1` binds the published port to loopback. To allow LAN access change `APP_HOST` to the Pi's private LAN address or `0.0.0.0`.
+
+> **Warning:** `APP_HOST=0.0.0.0` exposes the service on all interfaces. Do not do this without authentication (`APP_API_KEY`) and a reviewed secure access layer. An unusual port alone is not security.
+
+Before changing:
+
+1. Back up data (see **Back Up Data**).
+2. Confirm `APP_API_KEY` is set to a strong secret.
+3. Confirm `ENABLE_REMOTE_MODE` requirements are understood.
+
+Edit `.env`:
+
+```env
+APP_HOST=0.0.0.0
+```
+
+Recreate the service:
+
+```bash
+docker compose -f docker-compose.service.yml --env-file .env up -d --force-recreate ai-job-service
+```
+
+Verify from a LAN device:
+
+```bash
+curl --fail http://<PI_LAN_ADDRESS>:3927/health
+```
+
+To revert to local-only, set `APP_HOST=127.0.0.1` and recreate.
+
+## Use Tailscale Serve or Cloudflare Tunnel Safely
+
+When publishing the service through Tailscale Serve or a Cloudflare Tunnel, keep `APP_HOST=127.0.0.1`. The tunnel proxy reaches the service over loopback; the port is never exposed to the broader network.
+
+```env
+APP_HOST=127.0.0.1
+APP_PORT=3927
+```
+
+For Tailscale Serve:
+
+```bash
+tailscale serve https / http://127.0.0.1:3927
+tailscale serve status
+```
+
+For Cloudflare Tunnel, configure the tunnel ingress to forward to `http://127.0.0.1:3927`. Require a Cloudflare Access identity policy on the public hostname. Do not create a bypass route around Access.
+
+In both cases:
+
+- Do not expose Ollama port `11434` through any tunnel or Serve rule.
+- Keep `APP_API_KEY` configured as defense in depth.
+- Do not commit tunnel credentials or Access tokens to Git.
+
+## Check UID and GID
+
+The service container runs as `PUID:PGID` so the mounted `./data` directory stays writable without using root.
+
+Check the current account on the Pi:
+
+```bash
+id -u
+id -g
+```
+
+Check the values recorded in `.env`:
+
+```bash
+grep -E '^(PUID|PGID)=' .env
+```
+
+Check ownership of the data directory:
+
+```bash
+ls -ld data
+```
+
+`PUID` and `PGID` must match the owner of `data/`. If they differ, fix ownership and recreate (see **Fix Root-Owned Data**).
+
+## Fix Root-Owned Data
+
+If `./data` is owned by root (common after running `docker compose up` as root or without `PUID`/`PGID` set), the service container cannot write to it.
+
+Stop the service:
+
+```bash
+docker compose -f docker-compose.service.yml --env-file .env stop ai-job-service
+```
+
+Identify the target account:
+
+```bash
+id -u    # your Pi account UID
+id -g    # your Pi account GID
+```
+
+Transfer ownership:
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" data
+chmod 700 data
+```
+
+Confirm `.env` has matching values:
+
+```bash
+grep -E '^(PUID|PGID)=' .env
+```
+
+Update if needed, then recreate:
+
+```bash
+docker compose -f docker-compose.service.yml --env-file .env up -d --force-recreate ai-job-service
+curl --fail http://127.0.0.1:3927/health
+```
+
+Do not run the service as root or make `data` world-writable.
+
+## Back Up Data Before Changing Deployment
+
+Before any significant configuration change — rotating the API key, updating `OLLAMA_BASE_URL`, switching `APP_HOST`, upgrading the image, or restoring from backup — create a consistent snapshot first.
+
+```bash
+mkdir -p backups
+chmod 700 backups
+docker compose -f docker-compose.service.yml --env-file .env stop ai-job-service
+tar -C . -czf "backups/ai-job-data-$(date -u +%Y%m%dT%H%M%SZ).tar.gz" data
+docker compose -f docker-compose.service.yml --env-file .env start ai-job-service
+```
+
+Verify the archive:
+
+```bash
+tar -tzf backups/<BACKUP_FILE>.tar.gz | head
+```
+
+Copy backups to encrypted storage or another trusted machine. A backup stored only on the Pi does not protect against storage failure. Keep the previous backup until the deployment change is verified.
 
 ### Service is unhealthy
 
