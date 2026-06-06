@@ -250,7 +250,7 @@ Persistence requirements:
 The later service implementation should define at least:
 
 ```env
-APP_HOST=0.0.0.0
+APP_HOST=127.0.0.1
 APP_PORT=3927
 APP_DATA_DIR=/app/data
 OLLAMA_BASE_URL=http://<private-windows-address>:11434
@@ -261,7 +261,7 @@ ENABLE_REMOTE_MODE=false
 
 Notes:
 
-- `APP_HOST=0.0.0.0` is container-internal binding. Host publication must still be restricted by Compose, host firewall, and the chosen access layer.
+- `APP_HOST=127.0.0.1` is the safe default for Compose host publication through Tailscale Serve or Cloudflare Tunnel. Compose overrides the application process to listen on `0.0.0.0` inside the isolated container.
 - `APP_PORT=3927` is the service's internal/default port. A later Compose file may map any available Pi host port to it without changing application behavior.
 - `OLLAMA_BASE_URL` is resolved by the Pi service and must never point to a public Ollama endpoint.
 - `APP_API_KEY` is a placeholder contract for future implementation and must not be committed with a real value.

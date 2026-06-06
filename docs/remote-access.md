@@ -51,7 +51,7 @@ Use LAN-only access while setting up the Pi and Windows workstation. This is the
 ### Example environment
 
 ```env
-APP_HOST=0.0.0.0
+APP_HOST=192.168.1.20
 APP_PORT=3927
 APP_DATA_DIR=/app/data
 OLLAMA_BASE_URL=http://192.168.1.50:11434
@@ -60,7 +60,7 @@ APP_API_KEY=<GENERATE_A_STRONG_RANDOM_VALUE>
 ENABLE_REMOTE_MODE=false
 ```
 
-`APP_HOST=0.0.0.0` is the container-internal bind address. Restrict the host publication to the Pi's LAN address when practical:
+`APP_HOST` controls the Pi interface used by the Compose port publication. Compose separately binds the process inside the container.
 
 ```yaml
 ports:
@@ -94,7 +94,7 @@ Tailscale Serve can provide a tailnet-only HTTPS URL and proxy it to a service l
 ### Example environment
 
 ```env
-APP_HOST=0.0.0.0
+APP_HOST=127.0.0.1
 APP_PORT=3927
 APP_DATA_DIR=/app/data
 OLLAMA_BASE_URL=http://100.101.102.50:11434
@@ -201,7 +201,7 @@ Cloudflare Tunnel alone is not authentication. Create a Cloudflare Access self-h
 ### Example environment
 
 ```env
-APP_HOST=0.0.0.0
+APP_HOST=127.0.0.1
 APP_PORT=3927
 APP_DATA_DIR=/app/data
 OLLAMA_BASE_URL=http://192.168.1.50:11434
