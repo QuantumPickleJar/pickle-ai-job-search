@@ -64,6 +64,30 @@
         background: #f0fff7;
       }
 
+      .settings {
+        margin: 12px 0;
+        padding: 10px;
+        border: 1px solid #d9e2ec;
+        background: #fff;
+      }
+
+      .settings input {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 30px;
+        border: 1px solid #bcccdc;
+        padding: 4px 8px;
+      }
+
+      .actions {
+        display: grid;
+        gap: 8px;
+      }
+
+      .secondary {
+        background: #486581;
+      }
+
       button {
         width: 100%;
         min-height: 34px;
@@ -108,9 +132,23 @@
       <div id="sourceUrl" class="value">Capturing...</div>
     </div>
 
+    <div class="settings">
+      <div class="field">
+        <span class="label">Service Base URL</span>
+        <input id="serviceBaseUrl" type="url" spellcheck="false" placeholder="http://localhost:3927">
+      </div>
+      <div class="field">
+        <span class="label">API Key (X-API-Key)</span>
+        <input id="apiKey" type="password" spellcheck="false" placeholder="Paste APP_API_KEY">
+      </div>
+      <button id="saveSettingsButton" class="secondary" type="button">Save Settings</button>
+    </div>
+
     <div id="status" class="status">Open a LinkedIn job page, then use this popup to preview and save it locally.</div>
 
-    <button id="saveButton" type="button" disabled>Save Local Job</button>
+    <div class="actions">
+      <button id="saveButton" type="button" disabled>Save Job</button>
+    </div>
 
     <script src="popup.js"></script>
   </body>

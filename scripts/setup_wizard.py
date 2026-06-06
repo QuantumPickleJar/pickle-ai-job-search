@@ -213,9 +213,16 @@ def docker_compose_available() -> tuple[bool, str]:
 
 
 def fetch_json(url: str, timeout: int) -> dict[str, object]:
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    """Fetch JSON from a URL with robust timeout handling for Windows."""
+    try:
+        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except socket.timeout:
+        raise urllib.error.URLError(f"socket timeout after {timeout} seconds")
+    except socket.gaierror as exc:
+        # DNS resolution failed
+        raise urllib.error.URLError(f"DNS resolution failed: {exc}")
 
 
 def fetch_models(base_url: str) -> tuple[bool, list[str], str]:
@@ -228,6 +235,8 @@ def fetch_models(base_url: str) -> tuple[bool, list[str], str]:
         return False, [], f"Ollama is not reachable at {tags_url}: {exc}"
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         return False, [], f"Ollama returned invalid JSON: {exc}"
+    except Exception as exc:
+        return False, [], f"Unexpected error checking {tags_url}: {type(exc).__name__}: {exc}"
 
     raw_models = payload.get("models")
     if not isinstance(raw_models, list):
@@ -323,11 +332,12 @@ def check_ollama(base_url: str, model: str, result: SetupResult) -> None:
 
 def likely_private_ip() -> str | None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(2)  # Add 2-second timeout to prevent hanging
     try:
         sock.connect(("192.0.2.1", 80))
         address = sock.getsockname()[0]
         return address if not address.startswith("127.") else None
-    except OSError:
+    except (OSError, socket.timeout):
         return None
     finally:
         sock.close()
@@ -578,6 +588,11 @@ def print_summary(result: SetupResult) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Set a global socket timeout to prevent hanging on DNS lookups
+    # and other socket operations on Windows
+    import socket as _socket_module
+    _socket_module.setdefaulttimeout(5)
+    
     try:
         args = parse_args(argv)
         root = repo_root_from(args)
@@ -593,10 +608,10 @@ def main(argv: list[str] | None = None) -> int:
         ):
             if key in os.environ:
                 env[key] = os.environ[key]
-        print(f"Repository root: {root}")
-        print(f"Selected role: {role}")
+        print(f"Repository root: {root}", flush=True)
+        print(f"Selected role: {role}", flush=True)
         if args.dry_run:
-            print("[DRY-RUN] No files or directories will be changed.")
+            print("[DRY-RUN] No files or directories will be changed.", flush=True)
 
         if role == "diagnostics":
             result = run_diagnostics(root)
@@ -615,6 +630,14 @@ def main(argv: list[str] | None = None) -> int:
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+    except Exception as exc:
+        print(f"UNEXPECTED ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+    finally:
+        # Reset socket timeout
+        _socket_module.setdefaulttimeout(None)
 
 
 if __name__ == "__main__":

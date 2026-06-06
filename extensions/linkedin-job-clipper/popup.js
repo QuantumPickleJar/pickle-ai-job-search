@@ -1,4 +1,5 @@
-const INTAKE_URL = "http://localhost:3927/jobs/capture";
+const DEFAULT_BASE_URL = "http://localhost:3927";
+const SETTINGS_KEY = "intakeSettings";
 
 const elements = {
   title: document.getElementById("title"),
@@ -6,11 +7,72 @@ const elements = {
   location: document.getElementById("location"),
   descriptionCount: document.getElementById("descriptionCount"),
   sourceUrl: document.getElementById("sourceUrl"),
+  serviceBaseUrl: document.getElementById("serviceBaseUrl"),
+  apiKey: document.getElementById("apiKey"),
+  saveSettingsButton: document.getElementById("saveSettingsButton"),
   status: document.getElementById("status"),
   saveButton: document.getElementById("saveButton"),
 };
 
 let capturedJob = null;
+let intakeSettings = {
+  baseUrl: DEFAULT_BASE_URL,
+  apiKey: "",
+};
+
+function normalizeBaseUrl(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return DEFAULT_BASE_URL;
+  }
+
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error("Service URL must be a valid absolute URL, for example http://192.168.0.72:3927");
+  }
+
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error("Service URL must use http or https.");
+  }
+  if (url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("Service URL must be only scheme + host + optional port.");
+  }
+  url.pathname = "";
+  return url.toString().replace(/\/$/, "");
+}
+
+function intakeUrlFrom(settings) {
+  return `${settings.baseUrl}/jobs/capture`;
+}
+
+function updateSettingsUi() {
+  elements.serviceBaseUrl.value = intakeSettings.baseUrl;
+  elements.apiKey.value = intakeSettings.apiKey;
+}
+
+async function loadSettings() {
+  const stored = await chrome.storage.local.get(SETTINGS_KEY);
+  const raw = stored[SETTINGS_KEY] || {};
+  intakeSettings = {
+    baseUrl: normalizeBaseUrl(raw.baseUrl || DEFAULT_BASE_URL),
+    apiKey: String(raw.apiKey || "").trim(),
+  };
+  updateSettingsUi();
+}
+
+async function saveSettings() {
+  const normalized = normalizeBaseUrl(elements.serviceBaseUrl.value);
+  const nextSettings = {
+    baseUrl: normalized,
+    apiKey: String(elements.apiKey.value || "").trim(),
+  };
+  await chrome.storage.local.set({ [SETTINGS_KEY]: nextSettings });
+  intakeSettings = nextSettings;
+  updateSettingsUi();
+  setStatus(`Settings saved. Capture target: ${intakeSettings.baseUrl}`);
+}
 
 function setStatus(message, kind = "") {
   elements.status.textContent = message;
@@ -42,7 +104,7 @@ function renderCapture(job) {
   }
 
   elements.saveButton.disabled = false;
-  setStatus("Preview captured. Review the fields, then save to the local intake server.");
+  setStatus("Preview captured. Review the fields, then save to the configured service.");
 }
 
 async function getActiveTab() {
@@ -69,20 +131,28 @@ async function saveCapturedJob() {
   }
 
   elements.saveButton.disabled = true;
-  setStatus("Saving to local intake server...");
+  const intakeUrl = intakeUrlFrom(intakeSettings);
+  setStatus(`Saving to ${intakeUrl} ...`);
 
   try {
-    const response = await fetch(INTAKE_URL, {
+    const headers = {
+      "Content-Type": "application/json",
+    };
+    if (intakeSettings.apiKey) {
+      headers["X-API-Key"] = intakeSettings.apiKey;
+    }
+
+    const response = await fetch(intakeUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(capturedJob),
     });
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(payload.error || `Local intake server returned HTTP ${response.status}.`);
+      throw new Error(
+        payload.detail || payload.error || `Service returned HTTP ${response.status}.`
+      );
     }
 
     setStatus(`Saved: ${payload.path || payload.id || "captured job"}`, "success");
@@ -90,7 +160,7 @@ async function saveCapturedJob() {
     elements.saveButton.disabled = false;
     const message =
       error instanceof TypeError
-        ? "Local intake server is not reachable at http://localhost:3927. Start it with: python scripts\\job_intake_server.py"
+        ? `Service is not reachable at ${intakeSettings.baseUrl}. Verify LAN/tailnet routing and service health.`
         : error.message;
     setStatus(`Save failed: ${message}`, "error");
   }
@@ -98,6 +168,7 @@ async function saveCapturedJob() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
+    await loadSettings();
     capturedJob = await captureCurrentJob();
     if (!capturedJob || capturedJob.error) {
       throw new Error(capturedJob && capturedJob.error ? capturedJob.error : "Capture failed.");
@@ -111,3 +182,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 elements.saveButton.addEventListener("click", saveCapturedJob);
+elements.saveSettingsButton.addEventListener("click", async () => {
+  try {
+    await saveSettings();
+  } catch (error) {
+    setStatus(`Settings failed: ${error.message}`, "error");
+  }
+});
