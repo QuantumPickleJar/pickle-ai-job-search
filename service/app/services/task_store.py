@@ -12,6 +12,7 @@ from typing import Any
 
 TASK_STATES = {"queued", "running", "succeeded", "failed"}
 TERMINAL_STATES = {"succeeded", "failed"}
+TASK_TYPES = {"process-job", "generate-cv", "generate-cover-letter"}
 
 
 class TaskStoreError(RuntimeError):
@@ -32,17 +33,26 @@ class TaskStore:
     def __init__(self, data_dir: Path) -> None:
         self.tasks_dir = data_dir / "tasks"
 
-    def create(self, job_id: str) -> dict[str, Any]:
+    def create(
+        self,
+        job_id: str,
+        *,
+        task_type: str = "process-job",
+        application_id: str | None = None,
+    ) -> dict[str, Any]:
+        if task_type not in TASK_TYPES:
+            raise TaskStoreError(f"invalid task type: {task_type}")
         timestamp = utc_timestamp()
         task = {
             "task_id": uuid.uuid4().hex,
             "job_id": job_id,
+            "task_type": task_type,
             "state": "queued",
             "created_at": timestamp,
             "updated_at": timestamp,
             "started_at": None,
             "completed_at": None,
-            "application_id": None,
+            "application_id": application_id,
             "error": None,
         }
         with self._lock:
@@ -99,7 +109,8 @@ class TaskStore:
                 task["started_at"] = timestamp
             if state in TERMINAL_STATES:
                 task["completed_at"] = timestamp
-                task["application_id"] = application_id
+                if application_id is not None:
+                    task["application_id"] = application_id
                 task["error"] = error
             self._write(task)
             return task
@@ -144,7 +155,12 @@ def is_task_id(value: str) -> bool:
 def validate_task(task: Any) -> None:
     if not isinstance(task, dict):
         raise InvalidTaskDataError("task JSON must be an object")
-    required = {"task_id", "job_id", "state", "created_at", "updated_at"}
+    task.setdefault("task_type", "process-job")
+    task.setdefault("application_id", None)
+    task.setdefault("started_at", None)
+    task.setdefault("completed_at", None)
+    task.setdefault("error", None)
+    required = {"task_id", "job_id", "task_type", "state", "created_at", "updated_at"}
     missing = sorted(required - task.keys())
     if missing:
         raise InvalidTaskDataError("task is missing field(s): " + ", ".join(missing))
@@ -152,6 +168,8 @@ def validate_task(task: Any) -> None:
         raise InvalidTaskDataError("task_id is invalid")
     if not isinstance(task["job_id"], str) or not task["job_id"]:
         raise InvalidTaskDataError("job_id is invalid")
+    if task["task_type"] not in TASK_TYPES:
+        raise InvalidTaskDataError("task type is invalid")
     if task["state"] not in TASK_STATES:
         raise InvalidTaskDataError("task state is invalid")
 

@@ -200,6 +200,12 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
     for task in tasks:
         job_id = escape(str(task.get("job_id", "")), quote=True)
         application_id = task.get("application_id")
+        task_type = str(task.get("task_type") or "process-job")
+        task_label = {
+            "process-job": "Fit analysis",
+            "generate-cv": "Generate CV",
+            "generate-cover-letter": "Generate cover letter",
+        }.get(task_type, task_type.replace("-", " "))
         result = (
             f'<a href="/ui/applications/{escape(str(application_id), quote=True)}">'
             "Open workspace</a>"
@@ -210,6 +216,7 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
             f"""
 <tr>
   <td><a class="primary-link" href="/ui/jobs/{job_id}">{escape(str(task.get("job_id") or "Unknown job"))}</a></td>
+    <td>{escape(task_label)}</td>
   <td>{status_badge(task.get("state"))}</td>
   <td>{result}</td>
   <td class="mono">{escape(short_date(task.get("updated_at")))}</td>
@@ -221,7 +228,7 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
     return f"""
 <div class="table-wrap">
 <table>
-  <thead><tr><th>Job</th><th>State</th><th>Result</th><th>Updated</th></tr></thead>
+    <thead><tr><th>Job</th><th>Task</th><th>State</th><th>Result</th><th>Updated</th></tr></thead>
   <tbody>{''.join(rows)}</tbody>
 </table>
 </div>

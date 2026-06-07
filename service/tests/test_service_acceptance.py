@@ -323,10 +323,42 @@ class ServiceAcceptanceTests(unittest.TestCase):
             time.sleep(0.1)
 
         self.assertEqual(task.get("state"), "succeeded", task)
+        self.assertEqual(task.get("task_type"), "process-job")
         self.assertTrue(task.get("application_id"))
         application_dir = self.data_dir / "applications" / str(task["application_id"])
         self.assertTrue((application_dir / "fit-analysis.json").is_file())
         self.assertTrue((application_dir / "application-checklist.md").is_file())
+
+    def test_task_store_supports_application_generation_tasks(self) -> None:
+        captured = self.capture_job("Queued CV Software")
+        job_id = captured["id"]
+
+        status, response = self.request(
+            "POST",
+            f"/jobs/{job_id}/process",
+            api_key=API_KEY,
+        )
+        self.assertEqual(status, 202)
+        process_task_id = response["task_id"]
+
+        deadline = time.monotonic() + 10
+        application_id = ""
+        while time.monotonic() < deadline:
+            task_status, task = self.request("GET", f"/tasks/{process_task_id}")
+            self.assertEqual(task_status, 200)
+            if task["state"] == "succeeded":
+                application_id = str(task["application_id"])
+                break
+            time.sleep(0.1)
+
+        self.assertTrue(application_id)
+
+        from app.services.task_store import TaskStore
+
+        store = TaskStore(self.data_dir)
+        task = store.create(application_id, task_type="generate-cv", application_id=application_id)
+        self.assertEqual(task["task_type"], "generate-cv")
+        self.assertEqual(task["application_id"], application_id)
 
 
 if __name__ == "__main__":

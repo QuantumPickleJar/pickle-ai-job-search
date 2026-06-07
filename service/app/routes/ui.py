@@ -19,7 +19,7 @@ from app.services.job_store import (
     ResourceNotFoundError,
 )
 from app.services.ollama_client import OllamaClient, OllamaHealthError
-from app.services.processing import ProcessingError, generate_cover_letter, generate_cv
+from app.services.processing import ProcessingError
 from app.services.task_queue import TaskManager
 from app.services.task_store import InvalidTaskDataError, TaskStore
 from app.ui.views import (
@@ -415,13 +415,26 @@ def application_detail(
             status_code=404,
         )
 
+    try:
+        tasks = [
+            task
+            for task in TaskStore(settings.app_data_dir).list()
+            if task.get("application_id") == application_id
+        ]
+        task_error = ""
+    except InvalidTaskDataError as exc:
+        tasks, task_error = [], str(exc)
+
     cover_generated = request.query_params.get("cover") == "generated"
     cv_generated = request.query_params.get("cv") == "generated"
+    queued_task = request.query_params.get("queued", "")
     notice = ""
     if cover_generated:
         notice = f'Cover letter generated. <a href="#cover-letter-md" class="alert-link">View cover letter</a> or <a href="/ui/generated" class="alert-link">see all generated files</a>.'
     elif cv_generated:
         notice = f'CV draft generated. <a href="#cv-draft-md" class="alert-link">View CV draft</a> or <a href="/ui/generated" class="alert-link">see all generated files</a>.'
+    elif queued_task:
+        notice = f'Generation task queued: {escape(queued_task)}. Refresh this page or watch the task list below for completion.'
     files = application.get("files", {})
     display_order = (
         "fit-analysis.json",
@@ -466,6 +479,11 @@ def application_detail(
         f'<div class="detail-actions">{cover_form}{cv_form}</div>'
         + f'<div id="live-application-files" data-live-fragment="1">{content}</div>',
     )
+    body += (
+        '<div id="live-application-tasks" data-live-fragment="1">'
+        + section("Generation tasks", task_table(tasks))
+        + "</div>"
+    )
     return HTMLResponse(
         page(
             title="Application detail",
@@ -473,6 +491,7 @@ def application_detail(
             body=body,
             settings=settings,
             notice=notice,
+            error=task_error,
         )
     )
 
@@ -482,6 +501,8 @@ async def generate_cover_letter_action(
     application_id: str,
     request: Request,
     settings: Settings = Depends(get_settings),
+    store: JobStore = Depends(get_job_store),
+    manager: TaskManager = Depends(get_task_manager),
 ) -> Response:
     values = await read_form(request)
     safe_id = quote(application_id, safe="-._~")
@@ -501,23 +522,24 @@ async def generate_cover_letter_action(
         )
 
     try:
-        generate_cover_letter(application_id, settings)
-    except ProcessingError as exc:
+        store.get_application(application_id)
+    except (ResourceNotFoundError, InvalidStoredDataError) as exc:
         return HTMLResponse(
             page(
-                title="Generation failed",
+                title="Workspace unavailable",
                 active="applications",
                 body=empty_state(
-                    "Cover letter was not generated",
+                    "Cover letter was not queued",
                     str(exc),
                     f'<a class="button" href="/ui/applications/{safe_id}">Back to workspace</a>',
                 ),
                 settings=settings,
             ),
-            status_code=500,
+            status_code=404,
         )
 
-    return RedirectResponse(f"/ui/applications/{safe_id}?cover=generated", status_code=303)
+    task = manager.submit_application_task(application_id, "generate-cover-letter")
+    return RedirectResponse(f"/ui/applications/{safe_id}?queued={task['task_id']}", status_code=303)
 
 
 @router.post("/ui/applications/{application_id}/cv", response_class=HTMLResponse)
@@ -525,6 +547,8 @@ async def generate_cv_action(
     application_id: str,
     request: Request,
     settings: Settings = Depends(get_settings),
+    store: JobStore = Depends(get_job_store),
+    manager: TaskManager = Depends(get_task_manager),
 ) -> Response:
     values = await read_form(request)
     safe_id = quote(application_id, safe="-._~")
@@ -544,23 +568,24 @@ async def generate_cv_action(
         )
 
     try:
-        generate_cv(application_id, settings)
-    except ProcessingError as exc:
+        store.get_application(application_id)
+    except (ResourceNotFoundError, InvalidStoredDataError) as exc:
         return HTMLResponse(
             page(
-                title="Generation failed",
+                title="Workspace unavailable",
                 active="applications",
                 body=empty_state(
-                    "CV was not generated",
+                    "CV was not queued",
                     str(exc),
                     f'<a class="button" href="/ui/applications/{safe_id}">Back to workspace</a>',
                 ),
                 settings=settings,
             ),
-            status_code=500,
+            status_code=404,
         )
 
-    return RedirectResponse(f"/ui/applications/{safe_id}?cv=generated", status_code=303)
+    task = manager.submit_application_task(application_id, "generate-cv")
+    return RedirectResponse(f"/ui/applications/{safe_id}?queued={task['task_id']}", status_code=303)
 
 
 @router.get("/ui/generated", response_class=HTMLResponse)
