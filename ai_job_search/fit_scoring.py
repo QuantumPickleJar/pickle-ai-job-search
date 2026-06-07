@@ -29,6 +29,13 @@ Evaluate the captured job against the candidate profile. Avoid unsupported claim
 Identify missing skills honestly. Prefer "maybe" over inflated "apply" when uncertain.
 Recommend "skip" for senior-only or clearly mismatched roles.
 
+CRITICAL CONSTRAINT - Enterprise Experience & Ownership:
+- The candidate HAS professional enterprise application experience (BizLink insurance quoting, UWO Portal, Dynamic Plan Benefits Designer).
+- Do NOT claim the candidate lacks enterprise application experience.
+- If a posting requires SENIOR ENTERPRISE ARCHITECTURE OWNERSHIP, frame that as a specific seniority/ownership gap, NOT as lack of enterprise exposure.
+- Do NOT claim the candidate owns or owned: BizLink, AgencyPortal, PowerWriter, ImageRight, UWO Portal, or the Applied Benefits platform architecture.
+- Describe contributions accurately: "contributed to", "worked on", "implemented features in", not "owned" or "architected".
+
 Required JSON shape:
 {
   "overall_score": 0,
