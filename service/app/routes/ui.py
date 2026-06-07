@@ -19,6 +19,7 @@ from app.services.job_store import (
     ResourceNotFoundError,
 )
 from app.services.ollama_client import OllamaClient, OllamaHealthError
+from app.services.processing import ProcessingError, generate_cover_letter
 from app.services.task_queue import TaskManager
 from app.services.task_store import InvalidTaskDataError, TaskStore
 from app.ui.views import (
@@ -67,7 +68,7 @@ def dashboard(
         for state in ("queued", "running", "succeeded", "failed")
     }
     metrics = f"""
-<div class="metrics">
+<div id="live-metrics" class="metrics" data-live-fragment="1">
   {metric("Captured jobs", len(jobs), "/ui/jobs")}
   {metric("Applications", len(applications), "/ui/applications")}
   {metric("Active tasks", state_counts["queued"] + state_counts["running"], "/ui#tasks")}
@@ -75,12 +76,20 @@ def dashboard(
 </div>
 """
     body = metrics
-    body += section(
-        "Recent jobs",
-        job_table(jobs[:5]),
-        '<a href="/ui/jobs">View all</a>',
+    body += (
+        '<div id="live-recent-jobs" data-live-fragment="1">'
+        + section(
+            "Recent jobs",
+            job_table(jobs[:5]),
+            '<a href="/ui/jobs">View all</a>',
+        )
+        + "</div>"
     )
-    body += f'<div id="tasks">{section("Processing activity", task_table(tasks[:6]))}</div>'
+    body += (
+        '<div id="live-tasks" data-live-fragment="1">'
+        + f'<div id="tasks">{section("Processing activity", task_table(tasks[:6]))}</div>'
+        + "</div>"
+    )
     return HTMLResponse(
         page(
             title="Dashboard",
@@ -183,7 +192,11 @@ def captured_jobs(
   <button class="button" type="submit">Search</button>
 </form>
 """
-    body = search + section(f"Captured jobs ({len(jobs)})", job_table(jobs))
+    body = search + (
+        f'<div id="live-jobs-list" data-live-fragment="1">'
+        f'{section(f"Captured jobs ({len(jobs)})", job_table(jobs))}'
+        "</div>"
+    )
     return HTMLResponse(
         page(
             title="Captured jobs",
@@ -284,7 +297,11 @@ def job_detail(
         "Posting details",
         content or '<p class="muted panel-message">No additional details captured.</p>',
     )
-    body += section("Processing history", task_table(tasks))
+    body += (
+        '<div id="live-job-tasks" data-live-fragment="1">'
+        + section("Processing history", task_table(tasks))
+        + "</div>"
+    )
     return HTMLResponse(
         page(
             title=str(job.get("title") or "Job detail"),
@@ -355,9 +372,13 @@ def applications(
         error = ""
     except InvalidStoredDataError as exc:
         items, error = [], str(exc)
-    body = section(
-        f"Application workspaces ({len(items)})",
-        application_table(items),
+    body = (
+        '<div id="live-applications-list" data-live-fragment="1">'
+        + section(
+            f"Application workspaces ({len(items)})",
+            application_table(items),
+        )
+        + "</div>"
     )
     return HTMLResponse(
         page(
@@ -373,6 +394,7 @@ def applications(
 @router.get("/ui/applications/{application_id}", response_class=HTMLResponse)
 def application_detail(
     application_id: str,
+    request: Request,
     settings: Settings = Depends(get_settings),
     store: JobStore = Depends(get_job_store),
 ) -> HTMLResponse:
@@ -393,9 +415,12 @@ def application_detail(
             status_code=404,
         )
 
+    generated_notice = request.query_params.get("cover") == "generated"
+    notice = "Full cover letter generated." if generated_notice else ""
     files = application.get("files", {})
     display_order = (
         "fit-analysis.json",
+        "cover-letter.md",
         "resume-targeting.md",
         "cover-letter-notes.md",
         "application-checklist.md",
@@ -415,15 +440,72 @@ def application_detail(
             "Workspace is empty",
             "No reviewable application files were found.",
         )
-    body = section(application_id, content)
+
+    auth = api_key_field(settings)
+    safe_id = quote(application_id, safe="-._~")
+    cover_form = f"""
+<form class="process-form" method="post" action="/ui/applications/{safe_id}/cover-letter">
+  {auth}
+  <button class="button button-primary" type="submit">Generate full cover letter</button>
+</form>
+"""
+    body = section(
+        application_id,
+        f'<div class="detail-actions">{cover_form}</div>'
+        + f'<div id="live-application-files" data-live-fragment="1">{content}</div>',
+    )
     return HTMLResponse(
         page(
             title="Application detail",
             active="applications",
             body=body,
             settings=settings,
+            notice=notice,
         )
     )
+
+
+@router.post("/ui/applications/{application_id}/cover-letter", response_class=HTMLResponse)
+async def generate_cover_letter_action(
+    application_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    values = await read_form(request)
+    safe_id = quote(application_id, safe="-._~")
+    if not api_key_is_valid(values.get("api_key"), settings):
+        return HTMLResponse(
+            page(
+                title="Authorization required",
+                active="applications",
+                body=empty_state(
+                    "Cover letter was not generated",
+                    "The API key was missing or invalid.",
+                    f'<a class="button" href="/ui/applications/{safe_id}">Back to workspace</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=401,
+        )
+
+    try:
+        generate_cover_letter(application_id, settings)
+    except ProcessingError as exc:
+        return HTMLResponse(
+            page(
+                title="Generation failed",
+                active="applications",
+                body=empty_state(
+                    "Cover letter was not generated",
+                    str(exc),
+                    f'<a class="button" href="/ui/applications/{safe_id}">Back to workspace</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=500,
+        )
+
+    return RedirectResponse(f"/ui/applications/{safe_id}?cover=generated", status_code=303)
 
 
 @router.get("/ui/health", response_class=HTMLResponse)
