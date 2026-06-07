@@ -417,11 +417,11 @@ def application_detail(
 
     cover_generated = request.query_params.get("cover") == "generated"
     cv_generated = request.query_params.get("cv") == "generated"
-    notice = (
-        "Cover letter generated." if cover_generated
-        else "CV draft generated." if cv_generated
-        else ""
-    )
+    notice = ""
+    if cover_generated:
+        notice = f'Cover letter generated. <a href="#cover-letter-md" class="alert-link">View cover letter</a> or <a href="/ui/generated" class="alert-link">see all generated files</a>.'
+    elif cv_generated:
+        notice = f'CV draft generated. <a href="#cv-draft-md" class="alert-link">View CV draft</a> or <a href="/ui/generated" class="alert-link">see all generated files</a>.'
     files = application.get("files", {})
     display_order = (
         "fit-analysis.json",
@@ -561,6 +561,78 @@ async def generate_cv_action(
         )
 
     return RedirectResponse(f"/ui/applications/{safe_id}?cv=generated", status_code=303)
+
+
+@router.get("/ui/generated", response_class=HTMLResponse)
+def generated_files(
+    settings: Settings = Depends(get_settings),
+    store: JobStore = Depends(get_job_store),
+) -> HTMLResponse:
+    try:
+        applications = store.list_applications()
+        error = ""
+    except InvalidStoredDataError as exc:
+        applications, error = [], str(exc)
+
+    # Collect all generated files across all applications
+    generated_items = []
+    for app in applications:
+        app_id = app.get("application_id", "")
+        files = app.get("available_files", [])
+        generated_files = [f for f in files if f in ("cv-draft.md", "cover-letter.md")]
+        
+        for filename in generated_files:
+            file_type = "CV Draft" if filename == "cv-draft.md" else "Cover Letter"
+            generated_items.append({
+                "application_id": app_id,
+                "filename": filename,
+                "file_type": file_type,
+            })
+
+    # Build the table
+    if generated_items:
+        rows = []
+        for item in generated_items:
+            safe_id = quote(item["application_id"], safe="-._~")
+            file_anchor = item["filename"].replace(".", "-").lower()
+            rows.append(
+                f"""
+<tr>
+  <td><a class="primary-link" href="/ui/applications/{safe_id}#{file_anchor}">{escape(item['file_type'])}</a>
+      <span class="cell-note">{escape(item['application_id'])}</span></td>
+  <td>{escape(item['filename'])}</td>
+  <td><a href="/ui/applications/{safe_id}">View workspace</a></td>
+</tr>
+"""
+            )
+        table_content = f"""
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Generated File</th><th>Filename</th><th>Workspace</th></tr></thead>
+  <tbody>{''.join(rows)}</tbody>
+</table>
+</div>
+"""
+    else:
+        table_content = empty_state(
+            "No generated files",
+            "Use the CV or cover letter generators in application workspaces to create files.",
+            '<a class="button button-primary" href="/ui/applications">View applications</a>',
+        )
+
+    body = section(
+        f"Generated files ({len(generated_items)})",
+        table_content,
+    )
+    return HTMLResponse(
+        page(
+            title="Generated files",
+            active="generated",
+            body=body,
+            settings=settings,
+            error=error,
+        )
+    )
 
 
 @router.get("/ui/health", response_class=HTMLResponse)

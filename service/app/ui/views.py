@@ -27,10 +27,11 @@ def page(
             ("submit", "Submit job", "/ui/jobs/new"),
             ("jobs", "Captured jobs", "/ui/jobs"),
             ("applications", "Applications", "/ui/applications"),
+            ("generated", "Generated", "/ui/generated"),
             ("health", "Health", "/ui/health"),
         )
     )
-    notice_html = alert(notice, "success") if notice else ""
+    notice_html = alert(notice, "success", allow_html=True) if notice else ""
     error_html = alert(error, "error") if error else ""
     remote_label = "Remote mode" if settings.enable_remote_mode else "Local mode"
     return f"""<!doctype html>
@@ -84,8 +85,9 @@ def nav_link(label: str, href: str, is_active: bool) -> str:
     return f'<a class="{css_class}" href="{href}"{current}>{escape(label)}</a>'
 
 
-def alert(message: str, kind: str) -> str:
-    return f'<div class="alert alert-{kind}" role="status">{escape(message)}</div>'
+def alert(message: str, kind: str, *, allow_html: bool = False) -> str:
+    content = message if allow_html else escape(message)
+    return f'<div class="alert alert-{kind}" role="status">{content}</div>'
 
 
 def status_badge(value: Any) -> str:
@@ -274,6 +276,8 @@ def render_file(filename: str, value: Any, *, expanded: bool = True) -> str:
             polished = render_markdown_block(content)
 
     open_attribute = " open" if expanded else ""
+    # Create a URL-safe ID from the filename for anchor links
+    file_id = filename.replace(".", "-").replace("_", "-").lower()
     
     if polished:
         # When polished rendering exists, show it and hide raw content in a nested toggle
@@ -283,7 +287,7 @@ def render_file(filename: str, value: Any, *, expanded: bool = True) -> str:
     <pre>{escape(content)}</pre>
   </details>"""
         return f"""
-<details class="file-view"{open_attribute}>
+<details class="file-view" id="{file_id}"{open_attribute}>
   <summary><span>{escape(filename)}</span><small>{language}</small></summary>
   <div class="file-polished">{polished}</div>
   {raw_section}
@@ -292,7 +296,7 @@ def render_file(filename: str, value: Any, *, expanded: bool = True) -> str:
     else:
         # No polished rendering, show raw content directly
         return f"""
-<details class="file-view"{open_attribute}>
+<details class="file-view" id="{file_id}"{open_attribute}>
   <summary><span>{escape(filename)}</span><small>{language}</small></summary>
   <pre>{escape(content)}</pre>
 </details>
