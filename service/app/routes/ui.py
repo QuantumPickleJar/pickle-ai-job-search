@@ -19,7 +19,7 @@ from app.services.job_store import (
     ResourceNotFoundError,
 )
 from app.services.ollama_client import OllamaClient, OllamaHealthError
-from app.services.processing import ProcessingError, generate_cover_letter
+from app.services.processing import ProcessingError, generate_cover_letter, generate_cv
 from app.services.task_queue import TaskManager
 from app.services.task_store import InvalidTaskDataError, TaskStore
 from app.ui.views import (
@@ -415,11 +415,17 @@ def application_detail(
             status_code=404,
         )
 
-    generated_notice = request.query_params.get("cover") == "generated"
-    notice = "Full cover letter generated." if generated_notice else ""
+    cover_generated = request.query_params.get("cover") == "generated"
+    cv_generated = request.query_params.get("cv") == "generated"
+    notice = (
+        "Cover letter generated." if cover_generated
+        else "CV draft generated." if cv_generated
+        else ""
+    )
     files = application.get("files", {})
     display_order = (
         "fit-analysis.json",
+        "cv-draft.md",
         "cover-letter.md",
         "resume-targeting.md",
         "cover-letter-notes.md",
@@ -446,12 +452,18 @@ def application_detail(
     cover_form = f"""
 <form class="process-form" method="post" action="/ui/applications/{safe_id}/cover-letter">
   {auth}
-  <button class="button button-primary" type="submit">Generate full cover letter</button>
+  <button class="button button-primary" type="submit">Generate cover letter</button>
+</form>
+"""
+    cv_form = f"""
+<form class="process-form" method="post" action="/ui/applications/{safe_id}/cv">
+  {auth}
+  <button class="button button-primary" type="submit">Generate CV draft</button>
 </form>
 """
     body = section(
         application_id,
-        f'<div class="detail-actions">{cover_form}</div>'
+        f'<div class="detail-actions">{cover_form}{cv_form}</div>'
         + f'<div id="live-application-files" data-live-fragment="1">{content}</div>',
     )
     return HTMLResponse(
@@ -506,6 +518,49 @@ async def generate_cover_letter_action(
         )
 
     return RedirectResponse(f"/ui/applications/{safe_id}?cover=generated", status_code=303)
+
+
+@router.post("/ui/applications/{application_id}/cv", response_class=HTMLResponse)
+async def generate_cv_action(
+    application_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    values = await read_form(request)
+    safe_id = quote(application_id, safe="-._~")
+    if not api_key_is_valid(values.get("api_key"), settings):
+        return HTMLResponse(
+            page(
+                title="Authorization required",
+                active="applications",
+                body=empty_state(
+                    "CV was not generated",
+                    "The API key was missing or invalid.",
+                    f'<a class="button" href="/ui/applications/{safe_id}">Back to workspace</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=401,
+        )
+
+    try:
+        generate_cv(application_id, settings)
+    except ProcessingError as exc:
+        return HTMLResponse(
+            page(
+                title="Generation failed",
+                active="applications",
+                body=empty_state(
+                    "CV was not generated",
+                    str(exc),
+                    f'<a class="button" href="/ui/applications/{safe_id}">Back to workspace</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=500,
+        )
+
+    return RedirectResponse(f"/ui/applications/{safe_id}?cv=generated", status_code=303)
 
 
 @router.get("/ui/health", response_class=HTMLResponse)

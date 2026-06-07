@@ -27,6 +27,14 @@ Use only information present in the job payload and fit-analysis context.
 If context is missing, write a neutral placeholder sentence rather than inventing details.
 """
 
+CV_SYSTEM_PROMPT = """You create targeted, factual CV/resume drafts in Markdown format.
+
+Return plain Markdown only.
+Do not fabricate skills, achievements, dates, employers, or education.
+Use only information present in the job posting, fit-analysis, and profile context.
+Format as a professional resume with clear sections.
+"""
+
 
 def process_job(job_path: Path, settings: Settings) -> Path:
     provider = OllamaProvider(
@@ -101,6 +109,44 @@ def read_text_file(path: Path, label: str) -> str:
     return text
 
 
+def generate_cv(application_id: str, settings: Settings) -> Path:
+    if not is_safe_identifier(application_id):
+        raise ProcessingError(f"invalid application id: {application_id}")
+
+    app_dir = settings.app_data_dir / "applications" / application_id
+    if not app_dir.is_dir():
+        raise ProcessingError(f"application workspace not found: {application_id}")
+
+    job = read_json_file(app_dir / "job.json", "job")
+    fit = read_json_file(app_dir / "fit-analysis.json", "fit analysis")
+    targeting = read_text_file(app_dir / "resume-targeting.md", "resume targeting notes")
+
+    provider = OllamaProvider(
+        model=settings.ollama_model,
+        base_url=settings.ollama_base_url,
+    )
+    request = ModelRequest(
+        system_prompt=CV_SYSTEM_PROMPT,
+        user_prompt=build_cv_prompt(job, fit, targeting),
+        temperature=0.3,
+        max_tokens=2000,
+        response_format="text",
+    )
+
+    try:
+        response = provider.complete(request)
+    except ModelProviderError as exc:
+        raise ProcessingError(f"CV generation failed: {exc}") from exc
+
+    content = response.text.strip()
+    if not content:
+        raise ProcessingError("CV generation returned empty content")
+
+    output_path = app_dir / "cv-draft.md"
+    output_path.write_text(content + "\n", encoding="utf-8")
+    return output_path
+
+
 def build_cover_letter_prompt(job: dict[str, Any], fit: dict[str, Any], notes: str) -> str:
     job_json = json.dumps(job, ensure_ascii=False, indent=2)
     fit_json = json.dumps(fit, ensure_ascii=False, indent=2)
@@ -125,4 +171,32 @@ Fit analysis JSON:
 
 Cover letter notes:
 {notes}
+"""
+
+
+def build_cv_prompt(job: dict[str, Any], fit: dict[str, Any], targeting: str) -> str:
+    job_json = json.dumps(job, ensure_ascii=False, indent=2)
+    fit_json = json.dumps(fit, ensure_ascii=False, indent=2)
+    return f"""Write a targeted CV/resume draft in Markdown format.
+
+Output format:
+- Start with candidate contact placeholder: "# [Candidate Name]\n[Email] | [Phone] | [Location]"
+- Include sections: Professional Summary, Key Skills, Work Experience, Education
+- Use bullet points for achievements and responsibilities
+- Emphasize skills and experiences that match the job requirements
+
+Style constraints:
+- Professional and achievement-focused
+- No markdown code fences
+- No invented claims
+- Use resume-targeting notes to guide emphasis
+
+Job context JSON:
+{job_json}
+
+Fit analysis JSON:
+{fit_json}
+
+Resume targeting notes:
+{targeting}
 """
