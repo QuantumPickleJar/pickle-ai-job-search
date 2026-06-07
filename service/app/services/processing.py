@@ -30,6 +30,12 @@ Return plain Markdown only.
 Do not fabricate skills, achievements, dates, or employers.
 Use only information present in the job payload and fit-analysis context.
 If context is missing, write a neutral placeholder sentence rather than inventing details.
+
+Critical claim constraints:
+- Do not claim the candidate lacks enterprise application experience.
+- The candidate has enterprise application contribution experience.
+- If a posting requires senior enterprise architecture ownership, describe only that ownership level as a gap.
+- Do not claim the candidate owned architecture for BizLink, AgencyPortal, PowerWriter, ImageRight, UWO Portal, or the Applied benefits platform.
 """
 
 CV_SYSTEM_PROMPT = """You write a targeted, copy-paste-ready CV draft in Markdown.
@@ -478,6 +484,9 @@ Style constraints:
 - No tables
 - No markdown code fences
 - No invented claims
+- Do not say the candidate lacks enterprise application experience.
+- If needed, phrase gaps as senior architecture ownership scope, not enterprise exposure.
+- Do not describe the candidate as architecture owner of BizLink, AgencyPortal, PowerWriter, ImageRight, UWO Portal, or Applied benefits platform.
 
 Job context JSON:
 {job_json}

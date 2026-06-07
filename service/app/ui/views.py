@@ -206,16 +206,35 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
             "generate-cv": "Generate CV",
             "generate-cover-letter": "Generate cover letter",
         }.get(task_type, task_type.replace("-", " "))
+        safe_application_id = escape(str(application_id), quote=True) if application_id else ""
+        generated_target = ""
+        if application_id and str(task.get("state")) == "succeeded":
+            if task_type == "generate-cover-letter":
+                generated_target = f"/ui/generated/{safe_application_id}/cover-letter.md"
+            elif task_type == "generate-cv":
+                generated_target = f"/ui/generated/{safe_application_id}/cv-draft.md"
+
         result = (
-            f'<a href="/ui/applications/{escape(str(application_id), quote=True)}">'
-            "Open workspace</a>"
+            f'<a href="{generated_target}">Open generated file</a>'
+            if generated_target
+            else (
+                f'<a href="/ui/applications/{safe_application_id}">Open workspace</a>'
+                if application_id
+                else escape(str(task.get("error") or "Waiting"))
+            )
+        )
+        target_href = (
+            f"/ui/applications/{escape(str(application_id), quote=True)}"
             if application_id
-            else escape(str(task.get("error") or "Waiting"))
+            else f"/ui/jobs/{job_id}"
+        )
+        target_label = (
+            escape(str(application_id)) if application_id else escape(str(task.get("job_id") or "Unknown job"))
         )
         rows.append(
             f"""
 <tr>
-  <td><a class="primary-link" href="/ui/jobs/{job_id}">{escape(str(task.get("job_id") or "Unknown job"))}</a></td>
+  <td><a class="primary-link" href="{target_href}">{target_label}</a></td>
     <td>{escape(task_label)}</td>
   <td>{status_badge(task.get("state"))}</td>
   <td>{result}</td>

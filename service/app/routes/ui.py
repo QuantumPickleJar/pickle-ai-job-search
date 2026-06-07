@@ -599,9 +599,11 @@ def generated_files(
     except InvalidStoredDataError as exc:
         applications, error = [], str(exc)
 
-    # Collect the latest cover letter and CV across all applications
-    latest_cover_letter = None
-    latest_cv = None
+    # Collect candidate generated files, then select the latest by modified time.
+    candidates: dict[str, list[dict[str, Any]]] = {
+        "cover-letter.md": [],
+        "cv-draft.md": [],
+    }
     
     for app_summary in applications:
         app_id = app_summary.get("application_id", "")
@@ -615,29 +617,29 @@ def generated_files(
             # If we can't load the full app, skip it
             continue
         
-        # Check for generated files and keep only the latest of each type
-        if "cover-letter.md" in files and "cover-letter.md" in available_files:
-            content = files["cover-letter.md"]
-            if latest_cover_letter is None:  # Keep the first one (which is the latest by iteration order)
-                latest_cover_letter = {
+        for filename in ("cover-letter.md", "cv-draft.md"):
+            if filename not in files or filename not in available_files:
+                continue
+            file_path = settings.app_data_dir / "applications" / app_id / filename
+            try:
+                modified_ts = file_path.stat().st_mtime
+            except OSError:
+                modified_ts = 0.0
+            candidates[filename].append(
+                {
                     "application_id": app_id,
-                    "filename": "cover-letter.md",
-                    "file_type": "Cover Letter",
-                    "content": content if isinstance(content, str) else "",
+                    "filename": filename,
+                    "file_type": "Cover Letter" if filename == "cover-letter.md" else "CV Draft",
+                    "content": files[filename] if isinstance(files[filename], str) else "",
+                    "modified_ts": modified_ts,
                 }
-        
-        if "cv-draft.md" in files and "cv-draft.md" in available_files:
-            content = files["cv-draft.md"]
-            if latest_cv is None:  # Keep the first one (which is the latest by iteration order)
-                latest_cv = {
-                    "application_id": app_id,
-                    "filename": "cv-draft.md",
-                    "file_type": "CV Draft",
-                    "content": content if isinstance(content, str) else "",
-                }
+            )
+
+    latest_cover_letter = max(candidates["cover-letter.md"], key=lambda item: float(item.get("modified_ts", 0.0)), default=None)
+    latest_cv = max(candidates["cv-draft.md"], key=lambda item: float(item.get("modified_ts", 0.0)), default=None)
 
     # Build the content
-    generated_items = [item for item in [latest_cover_letter, latest_cv] if item is not None]
+    generated_items = [item for item in (latest_cover_letter, latest_cv) if item is not None]
     
     if generated_items:
         # Create selectable list of generated files
@@ -646,8 +648,8 @@ def generated_files(
             safe_id = quote(item["application_id"], safe="-._~")
             file_id = f"gen-{item['application_id']}-{item['filename'].replace('.', '-')}"
             content_preview = item["content"][:200] + "..." if len(item["content"]) > 200 else item["content"]
-            
-            files_html.append(f"""
+                        file_link = f"/ui/generated/{safe_id}/{item['filename']}"
+                        files_html.append(f"""
 <div class="generated-file-card" id="{file_id}">
   <div class="card-header">
     <h3>{escape(item['file_type'])}</h3>
@@ -657,7 +659,8 @@ def generated_files(
     <pre class="file-preview"><code>{escape(content_preview)}</code></pre>
   </div>
   <div class="card-actions">
-    <a class="button button-small" href="/ui/applications/{safe_id}#{item['filename'].replace('.', '-').lower()}">View full</a>
+        <a class="button button-small" href="{file_link}">Open generated file</a>
+        <a class="button button-small" href="/ui/applications/{safe_id}">Open workspace</a>
   </div>
 </div>
 """)
@@ -688,6 +691,80 @@ def generated_files(
             body=body,
             settings=settings,
             error=error,
+        )
+    )
+
+
+@router.get("/ui/generated/{application_id}/{filename}", response_class=HTMLResponse)
+def generated_file_detail(
+    application_id: str,
+    filename: str,
+    settings: Settings = Depends(get_settings),
+    store: JobStore = Depends(get_job_store),
+) -> HTMLResponse:
+    allowed = {"cover-letter.md", "cv-draft.md"}
+    if filename not in allowed:
+        return HTMLResponse(
+            page(
+                title="Generated file unavailable",
+                active="generated",
+                body=empty_state(
+                    "Unsupported generated file",
+                    "Only cover-letter.md and cv-draft.md are available from this page.",
+                    '<a class="button" href="/ui/generated">Back to generated files</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=404,
+        )
+
+    try:
+        application = store.get_application(application_id)
+    except (ResourceNotFoundError, InvalidStoredDataError) as exc:
+        return HTMLResponse(
+            page(
+                title="Generated file unavailable",
+                active="generated",
+                body=empty_state(
+                    "Workspace unavailable",
+                    str(exc),
+                    '<a class="button" href="/ui/generated">Back to generated files</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=404,
+        )
+
+    files = application.get("files", {})
+    if filename not in files:
+        return HTMLResponse(
+            page(
+                title="Generated file unavailable",
+                active="generated",
+                body=empty_state(
+                    "File not found",
+                    f"{filename} is not present in {application_id}.",
+                    '<a class="button" href="/ui/generated">Back to generated files</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=404,
+        )
+
+    label = "Cover Letter" if filename == "cover-letter.md" else "CV Draft"
+    safe_id = quote(application_id, safe="-._~")
+    content = render_file(filename, files[filename], expanded=True)
+    body = section(
+        f"{label} - {application_id}",
+        content,
+        f'<a href="/ui/applications/{safe_id}">Open workspace</a>',
+    )
+    return HTMLResponse(
+        page(
+            title=f"Generated {label}",
+            active="generated",
+            body=body,
+            settings=settings,
         )
     )
 
