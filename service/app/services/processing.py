@@ -91,6 +91,8 @@ def generate_cover_letter(application_id: str, settings: Settings) -> Path:
     job = read_json_file(app_dir / "job.json", "job")
     fit = read_json_file(app_dir / "fit-analysis.json", "fit analysis")
     notes = read_text_file(app_dir / "cover-letter-notes.md", "cover letter notes")
+    profile_context = build_profile_context(settings)
+    documents_context = build_documents_context(settings)
 
     provider = OllamaProvider(
         model=settings.ollama_model,
@@ -99,7 +101,7 @@ def generate_cover_letter(application_id: str, settings: Settings) -> Path:
     )
     request = ModelRequest(
         system_prompt=COVER_LETTER_SYSTEM_PROMPT,
-        user_prompt=build_cover_letter_prompt(job, fit, notes),
+        user_prompt=build_cover_letter_prompt(job, fit, notes, profile_context, documents_context),
         temperature=0.3,
         max_tokens=1400,
         response_format="text",
@@ -157,21 +159,31 @@ def candidate_identity() -> dict[str, str]:
 
 def build_profile_context(settings: Settings) -> str:
     profile_dir = settings.app_data_dir / "profile"
-    if not profile_dir.is_dir():
-        return "Profile context unavailable."
-
     sections: list[str] = []
-    for filename in (
-        "resume_facts.md",
-        "skills_inventory.md",
-        "education.md",
-        "voice_and_style.md",
-        "disallowed_claims.md",
-        "base_profile.md",
+
+    if profile_dir.is_dir():
+        for filename in (
+            "resume_facts.md",
+            "project_inventory.md",
+            "experience_bullets.md",
+            "skills_inventory.md",
+            "disallowed_claims.md",
+            "education.md",
+            "voice_and_style.md",
+            "base_profile.md",
+        ):
+            content = read_optional_text_file(profile_dir / filename)
+            if content:
+                sections.append(f"## profile/{filename}\n{content}")
+
+    for path_str in (
+        "/app/.claude/skills/job-application-assistant/01-candidate-profile.md",
+        "/app/.claude/skills/job-application-assistant/04-job-evaluation.md",
     ):
-        content = read_optional_text_file(profile_dir / filename)
+        path = Path(path_str)
+        content = read_optional_text_file(path)
         if content:
-            sections.append(f"## {filename}\n{content}")
+            sections.append(f"## {path.as_posix().replace('/app/', '')}\n{content}")
 
     return "\n\n".join(sections) if sections else "Profile context unavailable."
 
@@ -469,7 +481,13 @@ def generate_cv(application_id: str, settings: Settings) -> Path:
     return output_path
 
 
-def build_cover_letter_prompt(job: dict[str, Any], fit: dict[str, Any], notes: str) -> str:
+def build_cover_letter_prompt(
+    job: dict[str, Any],
+    fit: dict[str, Any],
+    notes: str,
+    profile_context: str,
+    documents_context: str,
+) -> str:
     job_json = json.dumps(job, ensure_ascii=False, indent=2)
     fit_json = json.dumps(fit, ensure_ascii=False, indent=2)
     return f"""Write a complete, job-specific cover letter in Markdown.
@@ -487,6 +505,12 @@ Style constraints:
 - Do not say the candidate lacks enterprise application experience.
 - If needed, phrase gaps as senior architecture ownership scope, not enterprise exposure.
 - Do not describe the candidate as architecture owner of BizLink, AgencyPortal, PowerWriter, ImageRight, UWO Portal, or Applied benefits platform.
+
+Candidate profile context:
+{profile_context}
+
+Supporting document context:
+{documents_context}
 
 Job context JSON:
 {job_json}

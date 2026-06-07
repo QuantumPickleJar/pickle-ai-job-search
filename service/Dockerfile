@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY --chown=app:app service/app ./app
 COPY --chown=app:app ai_job_search ./ai_job_search
+COPY --chown=app:app .claude ./.claude
 
 RUN mkdir -p /app/data \
     && chown app:app /app/data

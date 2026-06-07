@@ -224,9 +224,13 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
             )
         )
         target_href = (
-            f"/ui/applications/{escape(str(application_id), quote=True)}"
-            if application_id
-            else f"/ui/jobs/{job_id}"
+            generated_target
+            if generated_target
+            else (
+                f"/ui/applications/{escape(str(application_id), quote=True)}"
+                if application_id
+                else f"/ui/jobs/{job_id}"
+            )
         )
         target_label = (
             escape(str(application_id)) if application_id else escape(str(task.get("job_id") or "Unknown job"))

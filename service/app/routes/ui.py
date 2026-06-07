@@ -682,7 +682,7 @@ def generated_files(
 
     body = section(
         f"Generated files ({len(generated_items)})",
-        table_content,
+        '<div class="panel-message"><p class="muted">Showing the latest generated cover letter and latest generated CV draft. Open either entry to view the single generated file.</p></div>' + table_content,
     )
     return HTMLResponse(
         page(
