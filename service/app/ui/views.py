@@ -274,11 +274,26 @@ def render_file(filename: str, value: Any, *, expanded: bool = True) -> str:
             polished = render_markdown_block(content)
 
     open_attribute = " open" if expanded else ""
-    polished_html = f'<div class="file-polished">{polished}</div>' if polished else ""
-    return f"""
+    
+    if polished:
+        # When polished rendering exists, show it and hide raw content in a nested toggle
+        raw_section = f"""
+  <details class="raw-toggle">
+    <summary>View raw {language}</summary>
+    <pre>{escape(content)}</pre>
+  </details>"""
+        return f"""
 <details class="file-view"{open_attribute}>
   <summary><span>{escape(filename)}</span><small>{language}</small></summary>
-  {polished_html}
+  <div class="file-polished">{polished}</div>
+  {raw_section}
+</details>
+"""
+    else:
+        # No polished rendering, show raw content directly
+        return f"""
+<details class="file-view"{open_attribute}>
+  <summary><span>{escape(filename)}</span><small>{language}</small></summary>
   <pre>{escape(content)}</pre>
 </details>
 """
