@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,10 @@ Hard constraints:
 - If a detail is missing or only partially verified, either omit it or phrase it conservatively.
 - Do not use filler claims, generic placeholder companies, fake dates, or fake project names.
 - Do not output commentary about your reasoning, source limitations, or what you chose to omit.
+- Do not use reference-letter names, referee employers, or unrelated document names as candidate employment history.
+- Do not mention any employer or school unless it appears in the verified candidate context.
+- Do not produce code fences, meta-instructions, or labels like "Tailored CV and Cover Letter".
+- Do not output a cover letter, greeting, sign-off, references section, or explanatory notes.
 
 Content goals:
 - Make the draft feel ready to refine and paste into a real CV workflow.
@@ -172,20 +177,6 @@ def build_documents_context(settings: Settings) -> str:
         return "Document context unavailable."
 
     sections: list[str] = []
-    readme = read_optional_text_file(documents_dir / "README.md")
-    if readme:
-        sections.append(f"## documents/README.md\n{readme}")
-
-    references_dir = documents_dir / "references"
-    if references_dir.is_dir():
-        reference_notes = []
-        for path in sorted(references_dir.glob("*.txt")):
-            content = read_optional_text_file(path)
-            if content:
-                reference_notes.append(f"### {path.name}\n{content}")
-        if reference_notes:
-            sections.append("## Reference Notes\n" + "\n\n".join(reference_notes))
-
     inventory_lines = []
     for folder_name in ("cv", "linkedin", "diplomas", "applications"):
         folder = documents_dir / folder_name
@@ -195,7 +186,11 @@ def build_documents_context(settings: Settings) -> str:
         if file_names:
             inventory_lines.append(f"- {folder_name}: {', '.join(file_names)}")
     if inventory_lines:
-        sections.append("## Document Inventory\n" + "\n".join(inventory_lines))
+        sections.append(
+            "## Document Inventory\n"
+            + "These files exist as supporting source material, but they are not authoritative unless their facts also appear in the curated profile context.\n"
+            + "\n".join(inventory_lines)
+        )
 
     return "\n\n".join(sections) if sections else "Document context unavailable."
 
@@ -210,7 +205,7 @@ def format_cv_output(content: str, job: dict[str, Any], identity: dict[str, str]
     title = cv_title(job)
     name = identity["name"]
     email = identity["email"]
-    body = content.strip()
+    body = sanitize_generated_cv(content).strip()
 
     body = body.replace("[Candidate Name]", name)
     body = body.replace("[Email]", email)
@@ -230,6 +225,37 @@ def format_cv_output(content: str, job: dict[str, Any], identity: dict[str, str]
     normalized_body = "\n".join(lines).strip()
     header = f"# {title}\n\n{name}\n{email}"
     return header + ("\n\n" + normalized_body if normalized_body else "") + "\n"
+
+
+def sanitize_generated_cv(content: str) -> str:
+    body = content.strip()
+    body = body.replace("```markdown", "")
+    body = body.replace("```md", "")
+    body = body.replace("```", "")
+    body = body.replace("[Candidate Name]", DEFAULT_CANDIDATE_NAME)
+    body = body.replace("[Email]", DEFAULT_CANDIDATE_EMAIL)
+    body = body.replace("[candidate.email]", DEFAULT_CANDIDATE_EMAIL)
+    body = body.replace("[candidate.phone]", "")
+    body = body.replace("candidate.email", DEFAULT_CANDIDATE_EMAIL)
+    body = body.replace("candidate.phone", "")
+
+    banned_phrases = (
+        "Tailored CV and Cover Letter",
+        "Tailoring the Cover Letter",
+        "Cover Letter for",
+        "Dear Hiring Manager",
+        "References available upon request",
+    )
+    cleaned_lines = []
+    for raw_line in body.splitlines():
+        line = raw_line.rstrip()
+        if any(phrase in line for phrase in banned_phrases):
+            continue
+        if re.match(r"^#+\s*(Objective|References)\b", line, re.IGNORECASE):
+            continue
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines).strip()
 
 
 def generate_cv(application_id: str, settings: Settings) -> Path:
@@ -341,6 +367,29 @@ Output contract:
 - Do not use placeholders like [Candidate Name], [Email], [Phone], [Company], or fake employer names.
 - Do not restate the entire source profile. Curate only the best evidence for this role.
 - If exact dates, degree names, or titles are unavailable, omit them or keep wording conservative rather than fabricating details.
+- Never use referee names, reference-letter employers, or document filenames as resume content.
+- Never claim the candidate worked at the target company unless that appears in verified candidate context.
+- Never introduce employers such as TechCorp, Innovate Solutions, Applied Systems, or Sprecher Brewing unless they appear in the verified candidate context.
+
+Required shape:
+- Write concise Markdown only.
+- Do not use code fences.
+- Do not include any explanatory text before or after the CV.
+- Use organization-based experience headings when exact titles are unknown.
+- If dates are unknown, omit the date line entirely.
+- Keep the summary to 2 or 3 sentences.
+- Keep the skills section selective and job-relevant.
+- For education, use only verified institutions from the candidate context.
+
+Preferred experience pattern:
+## Experience
+### UWO IT
+- concise relevant bullet
+- concise relevant bullet
+
+### Applied Benefits
+- concise relevant bullet
+- concise relevant bullet
 
 Writing rules:
 - Optimize for copy-paste readiness.
