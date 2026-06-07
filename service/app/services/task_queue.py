@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from pathlib import Path
@@ -11,6 +12,8 @@ from app.config import Settings
 from app.services.job_store import InvalidStoredDataError, JobStore, ResourceNotFoundError
 from app.services.processing import ProcessingError, generate_cover_letter, generate_cv, process_job
 from app.services.task_store import TaskStore, TaskStoreError
+
+logger = logging.getLogger(__name__)
 
 
 class TaskManager:
