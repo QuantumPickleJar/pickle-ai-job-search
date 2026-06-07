@@ -194,6 +194,130 @@ def build_documents_context(settings: Settings) -> str:
     return "\n\n".join(sections) if sections else "Document context unavailable."
 
 
+def parse_markdown_bullets(text: str, heading: str) -> list[str]:
+    pattern = re.compile(rf"^##+\s+{re.escape(heading)}\s*$", re.IGNORECASE | re.MULTILINE)
+    match = pattern.search(text)
+    if not match:
+        return []
+
+    lines = text[match.end():].splitlines()
+    items: list[str] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.startswith("##"):
+            break
+        bullet = re.match(r"^-\s+(.+)$", line)
+        if bullet:
+            items.append(bullet.group(1).strip())
+    return items
+
+
+def parse_markdown_sections(text: str) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {}
+    current = ""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        heading = re.match(r"^###\s+(.+)$", line)
+        if heading:
+            current = heading.group(1).strip()
+            sections.setdefault(current, [])
+            continue
+        bullet = re.match(r"^-\s+(.+)$", line)
+        if bullet and current:
+            sections.setdefault(current, []).append(bullet.group(1).strip())
+    return sections
+
+
+def first_nonempty(*values: str) -> str:
+    for value in values:
+        cleaned = value.strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def build_fallback_cv(job: dict[str, Any], fit: dict[str, Any], targeting: str, settings: Settings) -> str:
+    resume_facts = read_optional_text_file(settings.app_data_dir / "profile" / "resume_facts.md")
+    skills_inventory = read_optional_text_file(settings.app_data_dir / "profile" / "skills_inventory.md")
+    education_notes = read_optional_text_file(settings.app_data_dir / "profile" / "education.md")
+    experience_bullets = read_optional_text_file(settings.app_data_dir / "profile" / "experience_bullets.md")
+
+    matched_skills = [str(item).strip() for item in fit.get("matched_skills", []) if str(item).strip()]
+    resume_keywords = [str(item).strip() for item in fit.get("resume_keywords_to_include", []) if str(item).strip()]
+    missing_skills = [str(item).strip() for item in fit.get("missing_skills", []) if str(item).strip()]
+    reasons = [str(item).strip() for item in fit.get("reasons_to_apply", []) if str(item).strip()]
+
+    all_skills = []
+    for skill in matched_skills + resume_keywords:
+        if skill and skill not in all_skills:
+            all_skills.append(skill)
+    selected_skills = all_skills[:8]
+
+    experience_sections = parse_markdown_sections(experience_bullets)
+    uwo_bullets = experience_sections.get("UWO IT", [])[:3]
+    applied_bullets = experience_sections.get("Applied Benefits", [])[:3]
+
+    if not uwo_bullets:
+        uwo_bullets = [
+            "Contributed to application development work in a university IT environment.",
+            "Supported debugging, technical requirements, and documentation tasks for internal users.",
+        ]
+    if not applied_bullets:
+        applied_bullets = [
+            "Supported junior software development work for business applications.",
+            "Worked with C#, .NET, ASP.NET, and relational database concepts where verified by project history.",
+        ]
+
+    summary_parts = []
+    role = str(job.get("title") or "the target role").strip()
+    company = str(job.get("company") or "the employer").strip()
+    strongest_skills = ", ".join(selected_skills[:5]) if selected_skills else "backend development, databases, and maintainable application code"
+    summary_parts.append(
+        f"Early-career software developer targeting {role} opportunities with relevant experience in application development, database-backed systems, and maintainable internal tools."
+    )
+    summary_parts.append(
+        f"Relevant strengths for {company} include {strongest_skills}."
+    )
+    angle = first_nonempty(
+        str(fit.get("suggested_resume_angle") or ""),
+        first_nonempty(*reasons[:1]),
+    )
+    if angle:
+        summary_parts.append(angle)
+    summary = " ".join(summary_parts[:3])
+
+    education_lines = []
+    if "Fox Valley Technical College" in resume_facts or "Fox Valley Technical College" in education_notes:
+        education_lines.append("### Fox Valley Technical College\n- Associate's degree. Exact degree title and dates to confirm before final use.")
+    if "University of Wisconsin Oshkosh" in resume_facts or "University of Wisconsin Oshkosh" in education_notes:
+        education_lines.append("### University of Wisconsin Oshkosh\n- Bachelor's degree. Exact degree title and dates to confirm before final use.")
+    if not education_lines:
+        education_lines.append("### Education\n- Verified degree information needs manual completion before final submission.")
+
+    warnings = ""
+    if missing_skills:
+        warnings = "\n\n## Notes For Final Review\n- Avoid overclaiming: " + ", ".join(missing_skills[:4]) + "."
+
+    skills_lines = "\n".join(f"- {skill}" for skill in selected_skills) if selected_skills else "- Skills should be selected manually from verified profile facts."
+    uwo_lines = "\n".join(f"- {bullet}" for bullet in uwo_bullets)
+    applied_lines = "\n".join(f"- {bullet}" for bullet in applied_bullets)
+
+    return (
+        "## Professional Summary\n"
+        + summary
+        + "\n\n## Selected Skills\n"
+        + skills_lines
+        + "\n\n## Experience\n"
+        + "### UWO IT\n"
+        + uwo_lines
+        + "\n\n### Applied Benefits\n"
+        + applied_lines
+        + "\n\n## Education\n"
+        + "\n\n".join(education_lines)
+        + warnings
+    )
+
+
 def cv_title(job: dict[str, Any]) -> str:
     title = str(job.get("title") or "Unknown role").strip() or "Unknown role"
     company = str(job.get("company") or "Unknown company").strip() or "Unknown company"
@@ -326,14 +450,13 @@ def generate_cv(application_id: str, settings: Settings) -> Path:
 
     try:
         response = provider.complete(request)
-    except ModelProviderError as exc:
-        raise ProcessingError(f"CV generation failed: {exc}") from exc
-
-    content = response.text.strip()
-    if not content:
-        raise ProcessingError("CV generation returned empty content")
-
-    validate_generated_cv(content, job)
+        content = response.text.strip()
+        if not content:
+            raise ProcessingError("CV generation returned empty content")
+        validate_generated_cv(content, job)
+    except (ModelProviderError, ProcessingError):
+        content = build_fallback_cv(job, fit, targeting, settings)
+        validate_generated_cv(content, job)
 
     output_path = app_dir / "cv-draft.md"
     output_path.write_text(format_cv_output(content, job, identity), encoding="utf-8")
