@@ -62,6 +62,7 @@ def process_job(job_path: Path, settings: Settings) -> Path:
     provider = OllamaProvider(
         model=settings.ollama_model,
         base_url=settings.ollama_base_url,
+        timeout_seconds=120,
     )
     try:
         return apply_from_file(
@@ -88,6 +89,7 @@ def generate_cover_letter(application_id: str, settings: Settings) -> Path:
     provider = OllamaProvider(
         model=settings.ollama_model,
         base_url=settings.ollama_base_url,
+        timeout_seconds=120,
     )
     request = ModelRequest(
         system_prompt=COVER_LETTER_SYSTEM_PROMPT,
@@ -154,15 +156,12 @@ def build_profile_context(settings: Settings) -> str:
 
     sections: list[str] = []
     for filename in (
-        "base_profile.md",
         "resume_facts.md",
         "skills_inventory.md",
-        "experience_bullets.md",
         "education.md",
         "voice_and_style.md",
-        "job_preferences.md",
-        "project_inventory.md",
         "disallowed_claims.md",
+        "base_profile.md",
     ):
         content = read_optional_text_file(profile_dir / filename)
         if content:
@@ -258,6 +257,38 @@ def sanitize_generated_cv(content: str) -> str:
     return "\n".join(cleaned_lines).strip()
 
 
+def validate_generated_cv(content: str, job: dict[str, Any]) -> None:
+    lowered = content.lower()
+    forbidden_markers = (
+        "tailored cv and cover letter",
+        "tailoring the cover letter",
+        "dear hiring manager",
+        "cover letter for",
+        "references available upon request",
+        "```",
+    )
+    if any(marker in lowered for marker in forbidden_markers):
+        raise ProcessingError(
+            "CV generation returned invalid output. The model produced cover-letter or meta-analysis content instead of a CV draft."
+        )
+
+    required_sections = (
+        "## professional summary",
+        "## experience",
+        "## education",
+    )
+    if not all(section in lowered for section in required_sections):
+        raise ProcessingError(
+            "CV generation returned incomplete output. Expected CV sections were missing."
+        )
+
+    target_company = str(job.get("company") or "").strip().lower()
+    if target_company and f"worked at {target_company}" in lowered:
+        raise ProcessingError(
+            "CV generation returned invalid output. It appears to claim employment at the target company."
+        )
+
+
 def generate_cv(application_id: str, settings: Settings) -> Path:
     if not is_safe_identifier(application_id):
         raise ProcessingError(f"invalid application id: {application_id}")
@@ -276,6 +307,7 @@ def generate_cv(application_id: str, settings: Settings) -> Path:
     provider = OllamaProvider(
         model=settings.ollama_model,
         base_url=settings.ollama_base_url,
+        timeout_seconds=180,
     )
     request = ModelRequest(
         system_prompt=CV_SYSTEM_PROMPT,
@@ -288,7 +320,7 @@ def generate_cv(application_id: str, settings: Settings) -> Path:
             identity,
         ),
         temperature=0.3,
-        max_tokens=2000,
+        max_tokens=1200,
         response_format="text",
     )
 
@@ -300,6 +332,8 @@ def generate_cv(application_id: str, settings: Settings) -> Path:
     content = response.text.strip()
     if not content:
         raise ProcessingError("CV generation returned empty content")
+
+    validate_generated_cv(content, job)
 
     output_path = app_dir / "cv-draft.md"
     output_path.write_text(format_cv_output(content, job, identity), encoding="utf-8")
