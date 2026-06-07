@@ -348,6 +348,13 @@ Build:
 docker compose -f docker-compose.service.yml --env-file .env build
 ```
 
+
+Rebuild:
+```bash
+docker compose -f docker-compose.service.yml build --no-cache ai-job-service
+docker compose -f docker-compose.service.yml up -d --force-recreate ai-job-service
+```
+
 Start or update:
 
 ```bash
