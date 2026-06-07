@@ -599,43 +599,73 @@ def generated_files(
     except InvalidStoredDataError as exc:
         applications, error = [], str(exc)
 
-    # Collect all generated files across all applications
-    generated_items = []
-    for app in applications:
-        app_id = app.get("application_id", "")
-        files = app.get("available_files", [])
-        generated_files = [f for f in files if f in ("cv-draft.md", "cover-letter.md")]
+    # Collect the latest cover letter and CV across all applications
+    latest_cover_letter = None
+    latest_cv = None
+    
+    for app_summary in applications:
+        app_id = app_summary.get("application_id", "")
+        available_files = app_summary.get("available_files", [])
         
-        for filename in generated_files:
-            file_type = "CV Draft" if filename == "cv-draft.md" else "Cover Letter"
-            generated_items.append({
-                "application_id": app_id,
-                "filename": filename,
-                "file_type": file_type,
-            })
+        # Load full application data to get file contents
+        try:
+            app = store.get_application(app_id)
+            files = app.get("files", {})
+        except (ResourceNotFoundError, InvalidStoredDataError):
+            # If we can't load the full app, skip it
+            continue
+        
+        # Check for generated files and keep only the latest of each type
+        if "cover-letter.md" in files and "cover-letter.md" in available_files:
+            content = files["cover-letter.md"]
+            if latest_cover_letter is None:  # Keep the first one (which is the latest by iteration order)
+                latest_cover_letter = {
+                    "application_id": app_id,
+                    "filename": "cover-letter.md",
+                    "file_type": "Cover Letter",
+                    "content": content if isinstance(content, str) else "",
+                }
+        
+        if "cv-draft.md" in files and "cv-draft.md" in available_files:
+            content = files["cv-draft.md"]
+            if latest_cv is None:  # Keep the first one (which is the latest by iteration order)
+                latest_cv = {
+                    "application_id": app_id,
+                    "filename": "cv-draft.md",
+                    "file_type": "CV Draft",
+                    "content": content if isinstance(content, str) else "",
+                }
 
-    # Build the table
+    # Build the content
+    generated_items = [item for item in [latest_cover_letter, latest_cv] if item is not None]
+    
     if generated_items:
-        rows = []
+        # Create selectable list of generated files
+        files_html = []
         for item in generated_items:
             safe_id = quote(item["application_id"], safe="-._~")
-            file_anchor = item["filename"].replace(".", "-").lower()
-            rows.append(
-                f"""
-<tr>
-  <td><a class="primary-link" href="/ui/applications/{safe_id}#{file_anchor}">{escape(item['file_type'])}</a>
-      <span class="cell-note">{escape(item['application_id'])}</span></td>
-  <td>{escape(item['filename'])}</td>
-  <td><a href="/ui/applications/{safe_id}">View workspace</a></td>
-</tr>
-"""
-            )
+            file_id = f"gen-{item['application_id']}-{item['filename'].replace('.', '-')}"
+            content_preview = item["content"][:200] + "..." if len(item["content"]) > 200 else item["content"]
+            
+            files_html.append(f"""
+<div class="generated-file-card" id="{file_id}">
+  <div class="card-header">
+    <h3>{escape(item['file_type'])}</h3>
+    <span class="card-meta">{escape(item['application_id'])}</span>
+  </div>
+  <div class="card-body">
+    <pre class="file-preview"><code>{escape(content_preview)}</code></pre>
+  </div>
+  <div class="card-actions">
+    <a class="button button-small" href="/ui/applications/{safe_id}#{item['filename'].replace('.', '-').lower()}">View full</a>
+  </div>
+</div>
+""")
+        
+        content = "\n".join(files_html)
         table_content = f"""
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Generated File</th><th>Filename</th><th>Workspace</th></tr></thead>
-  <tbody>{''.join(rows)}</tbody>
-</table>
+<div id="live-generated-files" data-live-fragment="1">
+  {content}
 </div>
 """
     else:
@@ -644,6 +674,8 @@ def generated_files(
             "Use the CV or cover letter generators in application workspaces to create files.",
             '<a class="button button-primary" href="/ui/applications">View applications</a>',
         )
+        # Still wrap in live-fragment for auto-refresh detection
+        table_content = f'<div id="live-generated-files" data-live-fragment="1">{table_content}</div>'
 
     body = section(
         f"Generated files ({len(generated_items)})",
