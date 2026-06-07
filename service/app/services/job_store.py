@@ -21,6 +21,7 @@ APPLICATION_FILES = (
     "fit-analysis.json",
     "resume-targeting.md",
     "cover-letter-notes.md",
+    "cover-letter.md",
     "application-checklist.md",
 )
 SAFE_IDENTIFIER = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
