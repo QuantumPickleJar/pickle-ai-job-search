@@ -68,7 +68,7 @@ def process_job(job_path: Path, settings: Settings) -> Path:
     provider = OllamaProvider(
         model=settings.ollama_model,
         base_url=settings.ollama_base_url,
-        timeout_seconds=120,
+        timeout_seconds=300,
     )
     try:
         return apply_from_file(
@@ -97,7 +97,7 @@ def generate_cover_letter(application_id: str, settings: Settings) -> Path:
     provider = OllamaProvider(
         model=settings.ollama_model,
         base_url=settings.ollama_base_url,
-        timeout_seconds=120,
+        timeout_seconds=300,
     )
     request = ModelRequest(
         system_prompt=COVER_LETTER_SYSTEM_PROMPT,
@@ -449,7 +449,7 @@ def generate_cv(application_id: str, settings: Settings) -> Path:
     provider = OllamaProvider(
         model=settings.ollama_model,
         base_url=settings.ollama_base_url,
-        timeout_seconds=180,
+        timeout_seconds=300,
     )
     request = ModelRequest(
         system_prompt=CV_SYSTEM_PROMPT,
