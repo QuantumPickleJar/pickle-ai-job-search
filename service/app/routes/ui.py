@@ -639,17 +639,17 @@ def generated_files(
     latest_cv = max(candidates["cv-draft.md"], key=lambda item: float(item.get("modified_ts", 0.0)), default=None)
 
     # Build the content
-        generated_items = [item for item in (latest_cover_letter, latest_cv) if item is not None]
+    generated_items = [item for item in (latest_cover_letter, latest_cv) if item is not None]
 
-        if generated_items:
-                files_html = []
-                for item in generated_items:
-                        safe_id = quote(item["application_id"], safe="-._~")
-                        file_id = f"gen-{item['application_id']}-{item['filename'].replace('.', '-')}"
-                        content_preview = item["content"][:200] + "..." if len(item["content"]) > 200 else item["content"]
-                        file_link = f"/ui/generated/{safe_id}/{item['filename']}"
-                        files_html.append(
-                                f"""
+    if generated_items:
+        files_html = []
+        for item in generated_items:
+            safe_id = quote(item["application_id"], safe="-._~")
+            file_id = f"gen-{item['application_id']}-{item['filename'].replace('.', '-')}"
+            content_preview = item["content"][:200] + "..." if len(item["content"]) > 200 else item["content"]
+            file_link = f"/ui/generated/{safe_id}/{item['filename']}"
+            files_html.append(
+                f"""
 <div class="generated-file-card" id="{file_id}">
     <div class="card-header">
         <h3>{escape(item['file_type'])}</h3>
@@ -664,8 +664,7 @@ def generated_files(
     </div>
 </div>
 """
-                        )
-        
+            )
         content = "\n".join(files_html)
         table_content = f"""
 <div id="live-generated-files" data-live-fragment="1">
