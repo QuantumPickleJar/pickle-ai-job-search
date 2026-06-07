@@ -22,6 +22,7 @@ APPLICATION_FILES = (
     "resume-targeting.md",
     "cover-letter-notes.md",
     "cover-letter.md",
+    "cv-draft.md",
     "application-checklist.md",
 )
 SAFE_IDENTIFIER = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
