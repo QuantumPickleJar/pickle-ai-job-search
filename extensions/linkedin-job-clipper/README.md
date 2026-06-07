@@ -59,7 +59,11 @@ Local:    http://localhost:3927
 
 If `APP_API_KEY` is set on the service host, the API key field is required for saving jobs.
 
-## Start The Local Intake Server
+For Phase 3 deployments, this extension should point to the Pi-hosted service (LAN or tailnet). You do not need to run `scripts/job_intake_server.py` on the client laptop.
+
+## Optional Local Intake Server (Fallback Only)
+
+Use this only for local/offline development fallback. For Pi-hosted service use, skip this section.
 
 From the repository root:
 
@@ -103,7 +107,7 @@ extensions/linkedin-job-clipper/
 
 ## Test The Flow
 
-1. Start the local intake server or run the full service container.
+1. Run the full service container on the Pi (recommended) or start the local intake fallback server.
 2. Open one LinkedIn job posting manually.
 3. Click the LinkedIn Job Clipper extension icon.
 4. Set **Service Base URL** and **API Key**, then click **Save Settings**.
@@ -111,7 +115,7 @@ extensions/linkedin-job-clipper/
 6. Click **Save Job**.
 7. Confirm the service reports a successful save.
 
-For the simple localhost intake server, confirm a JSON file appears in:
+For the simple localhost fallback server, confirm a JSON file appears in:
 
 ```text
 job_intake/captured_jobs/
@@ -131,7 +135,7 @@ If required fields are missing, the popup disables saving and shows which fields
 
 ## CORS and Permissions
 
-The simple intake server allows extension origins such as:
+The simple fallback intake server allows extension origins such as:
 
 ```text
 chrome-extension://...

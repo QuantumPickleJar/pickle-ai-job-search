@@ -144,6 +144,8 @@ In the extension popup settings:
 - Service Base URL: `http://<PI_LAN_ADDRESS>:3927`
 - API Key: your `APP_API_KEY` from the service host `.env`
 
+The client laptop does not run `scripts/job_intake_server.py` in this mode. Capture requests go directly to the Pi service endpoint.
+
 Then save a LinkedIn job with the popup.
 
 ### 2. Tailnet mode (recommended steady state)
@@ -176,6 +178,8 @@ Update the extension popup settings:
 
 - Service Base URL: `https://<pi-host>.<tailnet>.ts.net`
 - API Key: unchanged, unless rotated
+
+The client laptop still does not run a local intake server in tailnet mode.
 
 Or use the web UI directly at the same tailnet URL plus `/ui`.
 
