@@ -80,6 +80,9 @@ CONFIDENCE_VALUES = {"low", "medium", "high"}
 PROFILE_CONTEXT_FILES = [
     "resume_facts.md",
     "disallowed_claims.md",
+    "project_inventory.md",
+    "experience_bullets.md",
+    "skills_inventory.md"
 ]
 
 
