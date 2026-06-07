@@ -146,17 +146,26 @@ class TaskManager:
                 )
             else:
                 raise TaskStoreError(f"unsupported task type: {task_type}")
-        except ProcessingError:
+        except ProcessingError as exc:
+            logger.error(f"[{task_id}] ProcessingError in {task_type}: {exc}", exc_info=True)
             if task_type == "process-job":
                 self._mark_failed(task_id, "Job processing failed; verify Ollama and service configuration")
             elif task_type == "generate-cv":
                 self._mark_failed(task_id, "CV generation failed; verify model output and service configuration")
             else:
                 self._mark_failed(task_id, "Cover letter generation failed; verify model output and service configuration")
-        except (OSError, TaskStoreError):
+        except OSError as exc:
+            logger.error(f"[{task_id}] OSError in {task_type}: {exc}", exc_info=True)
+            if "Permission denied" in str(exc):
+                self._mark_failed(task_id, f"Permission denied accessing data: {exc}")
+            else:
+                self._mark_failed(task_id, f"File system error: {exc}")
+        except TaskStoreError as exc:
+            logger.error(f"[{task_id}] TaskStoreError: {exc}", exc_info=True)
             self._mark_failed(task_id, "Task processing failed")
-        except Exception:
-            self._mark_failed(task_id, "Task processing failed unexpectedly")
+        except Exception as exc:
+            logger.error(f"[{task_id}] Unexpected exception in {task_type}: {exc}", exc_info=True)
+            self._mark_failed(task_id, f"Task processing failed: {type(exc).__name__}")
 
     def _mark_failed(self, task_id: str, message: str) -> None:
         try:

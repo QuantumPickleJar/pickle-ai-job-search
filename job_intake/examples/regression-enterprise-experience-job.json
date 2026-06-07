@@ -1,0 +1,60 @@
+{
+  "id": "2026-06-07_regression_enterprise_experience_test",
+  "source": "manual",
+  "source_url": "https://example.com/jobs/mid-level-dotnet-enterprise",
+  "captured_at": "2026-06-07T10:00:00-05:00",
+  "title": "Mid-Level .NET Developer - Enterprise Applications",
+  "company": "Enterprise Software Solutions Inc",
+  "location": "Remote",
+  "remote_status": "remote",
+  "employment_type": "full-time",
+  "seniority": "mid-level",
+  "description_text": "Enterprise Software Solutions is seeking a mid-level .NET developer with professional enterprise application development experience. In this role, you will work with C#, .NET Core, and ASP.NET to maintain and extend business-critical applications used across our organization. You should have hands-on experience building features in enterprise-grade systems, working with complex business logic, testing your code, and collaborating in a professional development environment. This is an excellent opportunity to grow your skills in enterprise-scale application development.",
+  "raw_text": "Mid-Level .NET Developer - Enterprise Applications. Required: Professional experience with enterprise business applications, C#, .NET Core, ASP.NET, SQL, unit testing, Git, Agile. Preferred: API design, Entity Framework, message queues, Docker.",
+  "requirements": [
+    "Professional experience contributing to enterprise-grade business applications",
+    "Strong C# and .NET Core / ASP.NET skills",
+    "Experience with SQL databases and relational data modeling",
+    "Unit testing expertise (xUnit, NUnit, MSTest, or equivalent)",
+    "Proficiency with Git-based workflows and code review practices",
+    "Ability to work with complex business logic and requirements",
+    "Team collaboration and communication skills"
+  ],
+  "preferred_qualifications": [
+    "Experience with API design and REST/GraphQL patterns",
+    "Familiarity with Entity Framework for ORM",
+    "Message queue or async processing experience",
+    "Docker containerization",
+    "CI/CD pipeline integration",
+    "Experience with insurance, financial services, or administrative business domains"
+  ],
+  "technologies": [
+    "C#",
+    ".NET Core",
+    "ASP.NET",
+    "SQL",
+    "Entity Framework",
+    "xUnit",
+    "REST APIs",
+    "Git",
+    "Docker"
+  ],
+  "responsibilities": [
+    "Develop features for enterprise business applications",
+    "Write and maintain unit tests",
+    "Collaborate with team members through code review",
+    "Debug and troubleshoot production issues",
+    "Participate in Agile planning and retrospectives",
+    "Document technical decisions and implementation details"
+  ],
+  "compensation": {
+    "min": 70000,
+    "max": 90000,
+    "currency": "USD",
+    "raw": "$70k - $90k"
+  },
+  "fit_analysis": null,
+  "application_status": "captured",
+  "capture_method": "manual_regression_test",
+  "notes": "REGRESSION TEST: This posting specifically asks for 'professional experience contributing to enterprise-grade business applications'. The fit analysis should NOT claim the candidate lacks enterprise application experience, as this is documented in profile/resume_facts.md. Acceptable outcomes: (1) Score the job high/apply because of enterprise BizLink/UWO/Applied experience, or (2) If there are gaps, frame them as specific seniority/ownership gaps, not lack of enterprise exposure. UNACCEPTABLE: Any claim that the candidate lacks enterprise application experience."
+}
