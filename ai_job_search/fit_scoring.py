@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,14 @@ Return JSON only. Do not include Markdown, commentary, or extra keys that are no
 Evaluate the captured job against the candidate profile. Avoid unsupported claims.
 Identify missing skills honestly. Prefer "maybe" over inflated "apply" when uncertain.
 Recommend "skip" for senior-only or clearly mismatched roles.
+
+Hard factual constraints:
+- The candidate has professional software/application development experience.
+- Do not claim the candidate lacks 2-3 years of general software development, software engineering, or application development experience.
+- The candidate has enterprise application experience through Secura/BizLink, UWO Portal/RoStar, and Applied Systems/Applied Benefits.
+- If a posting requires senior enterprise architecture ownership, that may be a gap; do not convert that into "no enterprise experience."
+- Missing skills belong in internal risk notes, not self-disqualifying cover-letter prose.
+- Do not mention certifications unless a certification is explicitly present in profile facts.
 
 CRITICAL CONSTRAINT - Enterprise Experience & Ownership:
 - The candidate HAS professional enterprise application experience (BizLink insurance quoting, UWO Portal, Dynamic Plan Benefits Designer).
@@ -85,11 +95,38 @@ OPTIONAL_STRING_ANALYSIS_FIELDS = ["confidence"]
 RECOMMENDATIONS = {"apply", "maybe", "skip"}
 CONFIDENCE_VALUES = {"low", "medium", "high"}
 PROFILE_CONTEXT_FILES = [
+    "base_profile.md",
     "resume_facts.md",
-    "disallowed_claims.md",
-    "project_inventory.md",
+    "education.md",
+    "skills_inventory.md",
     "experience_bullets.md",
-    "skills_inventory.md"
+    "project_inventory.md",
+    "experience_timeline.md",
+    "job_preferences.md",
+    "voice_and_style.md",
+    "disallowed_claims.md",
+    "generation-constraints.md",
+]
+
+FIT_OUTPUT_SAFETY_FIELDS = [
+    "risks",
+    "missing_skills",
+    "cover_letter_angle",
+    "questions_to_answer_before_applying",
+]
+
+DISQUALIFYING_PHRASES = [
+    "i do not meet",
+    "i don't meet",
+    "i lack the minimum",
+    "lacks the minimum 2-3 years",
+    "lacks 2-3 years",
+    "does not meet the minimum",
+    "no enterprise experience",
+    "limited exposure to enterprise",
+    "[your name]",
+    "[your address]",
+    "[mention",
 ]
 
 
@@ -97,10 +134,65 @@ class FitScoringError(RuntimeError):
     """Raised when fit scoring cannot produce valid output."""
 
 
+def profile_context_status(repo_root: Path) -> dict[str, Any]:
+    app_data_dir = os.getenv("APP_DATA_DIR", "").strip()
+    candidate_roots: list[tuple[str, Path]] = [("repo_root", repo_root / "profile")]
+    if app_data_dir:
+        app_data_profile = Path(app_data_dir) / "profile"
+        if app_data_profile not in [path for _, path in candidate_roots]:
+            candidate_roots.append(("APP_DATA_DIR", app_data_profile))
+
+    selected_label = candidate_roots[0][0]
+    selected_profile_dir = candidate_roots[0][1]
+    for label, path in candidate_roots:
+        if path.exists():
+            selected_label = label
+            selected_profile_dir = path
+            break
+
+    files: list[dict[str, Any]] = []
+    loaded: list[str] = []
+    missing: list[str] = []
+    for filename in PROFILE_CONTEXT_FILES:
+        file_path = selected_profile_dir / filename
+        exists = file_path.exists()
+        is_loaded = False
+        chars = 0
+        if exists:
+            text = file_path.read_text(encoding="utf-8").strip()
+            chars = len(text)
+            is_loaded = bool(text)
+        if is_loaded:
+            loaded.append(filename)
+        else:
+            missing.append(filename)
+        files.append(
+            {
+                "filename": filename,
+                "path": str(file_path),
+                "exists": exists,
+                "loaded": is_loaded,
+                "chars": chars,
+            }
+        )
+
+    return {
+        "repo_root": str(repo_root),
+        "selected_profile_dir": str(selected_profile_dir),
+        "selected_profile_source": selected_label,
+        "candidate_profile_dirs": [{"source": label, "path": str(path)} for label, path in candidate_roots],
+        "loaded_files": loaded,
+        "missing_files": missing,
+        "files": files,
+    }
+
+
 def load_profile_context(repo_root: Path) -> str:
+    status = profile_context_status(repo_root)
+    profile_dir = Path(status["selected_profile_dir"])
     sections = []
     for filename in PROFILE_CONTEXT_FILES:
-        path = repo_root / "profile" / filename
+        path = profile_dir / filename
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8").strip()
@@ -195,6 +287,102 @@ def normalize_fit_analysis(data: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _supports_certification_claims(profile_context: str) -> bool:
+    return bool(re.search(r"\b(certification|certifications|certified|certificate)\b", profile_context, re.IGNORECASE))
+
+
+def _contains_blocked_phrase(text: str, supports_certifications: bool) -> list[str]:
+    found: list[str] = []
+    lowered = text.lower()
+    for phrase in DISQUALIFYING_PHRASES:
+        if phrase in lowered:
+            found.append(phrase)
+    if not supports_certifications and "certification" in lowered:
+        found.append("certifications")
+    return found
+
+
+def _rewrite_disqualifying_text(text: str, supports_certifications: bool) -> str:
+    lowered = text.lower()
+
+    if "enterprise" in lowered and ("no enterprise experience" in lowered or "limited exposure to enterprise" in lowered):
+        return (
+            "Enterprise application experience is present. If required, describe the gap as limited senior "
+            "architecture ownership rather than lack of enterprise experience."
+        )
+
+    if (
+        "2-3 years" in lowered
+        or "i do not meet" in lowered
+        or "i don't meet" in lowered
+        or "i lack the minimum" in lowered
+        or "does not meet the minimum" in lowered
+    ):
+        return (
+            "General software/application development experience is present. If there is a gap, name the "
+            "specific technology or domain that is not yet verified."
+        )
+
+    cleaned = text
+    cleaned = re.sub(r"\[Your Name\]", "candidate", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\[Your Address\]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\[mention", "mention", cleaned, flags=re.IGNORECASE)
+    if not supports_certifications and re.search(r"\bcertifications?\b", cleaned, flags=re.IGNORECASE):
+        return "Only include certifications if they are explicitly confirmed in profile facts."
+
+    cleaned = cleaned.strip()
+    if cleaned:
+        return cleaned
+    return "Name only specific, verifiable gaps and avoid self-disqualifying language."
+
+
+def sanitize_fit_analysis_safety(
+    data: dict[str, Any],
+    profile_context: str,
+) -> tuple[dict[str, Any], list[str]]:
+    sanitized = dict(data)
+    warnings: list[str] = []
+    supports_certifications = _supports_certification_claims(profile_context)
+
+    for field in FIT_OUTPUT_SAFETY_FIELDS:
+        value = sanitized.get(field)
+        if isinstance(value, str):
+            found = _contains_blocked_phrase(value, supports_certifications)
+            if found:
+                sanitized[field] = _rewrite_disqualifying_text(value, supports_certifications)
+                warnings.append(f"{field}: blocked phrases rewritten ({', '.join(found)})")
+        elif isinstance(value, list):
+            rewritten: list[Any] = []
+            for item in value:
+                if isinstance(item, str):
+                    found = _contains_blocked_phrase(item, supports_certifications)
+                    if found:
+                        item = _rewrite_disqualifying_text(item, supports_certifications)
+                        warnings.append(f"{field}: blocked phrases rewritten ({', '.join(found)})")
+                rewritten.append(item)
+            sanitized[field] = rewritten
+
+    for field in FIT_OUTPUT_SAFETY_FIELDS:
+        value = sanitized.get(field)
+        if isinstance(value, str):
+            remaining = _contains_blocked_phrase(value, supports_certifications)
+            if remaining:
+                raise FitScoringError(
+                    f"fit-analysis safety check failed in {field}: blocked phrases remain ({', '.join(remaining)})"
+                )
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, str):
+                    remaining = _contains_blocked_phrase(item, supports_certifications)
+                    if remaining:
+                        raise FitScoringError(
+                            "fit-analysis safety check failed in "
+                            f"{field}[{index}]: blocked phrases remain ({', '.join(remaining)})"
+                        )
+
+    return sanitized, warnings
+
+
 def score_job_file(
     job_path: Path,
     provider: ModelProvider,
@@ -236,9 +424,15 @@ def score_job_file(
             f"{raw_path}: " + "; ".join(analysis_errors)
         )
 
+    normalized = normalize_fit_analysis(parsed)
+    normalized, safety_warnings = sanitize_fit_analysis_safety(normalized, profile_context)
+    if safety_warnings:
+        safety_path = output_dir / "fit-analysis.safety-warnings.txt"
+        safety_path.write_text("\n".join(safety_warnings) + "\n", encoding="utf-8")
+
     output_path = output_dir / "fit-analysis.json"
     output_path.write_text(
-        json.dumps(normalize_fit_analysis(parsed), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(normalized, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     return output_path

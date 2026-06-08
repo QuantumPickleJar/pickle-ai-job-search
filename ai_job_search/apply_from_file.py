@@ -7,7 +7,13 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ai_job_search.fit_scoring import FitScoringError, score_job_file, validate_fit_analysis
+from ai_job_search.fit_scoring import (
+    FitScoringError,
+    load_profile_context,
+    sanitize_fit_analysis_safety,
+    score_job_file,
+    validate_fit_analysis,
+)
 from ai_job_search.job_validation import load_json, validate_job
 from ai_job_search.model_provider import ModelProvider
 
@@ -196,6 +202,8 @@ def apply_from_file(job_path: Path, provider: ModelProvider, repo_root: Path) ->
     job = load_valid_job(job_path)
     app_dir = application_dir_for_job(job, repo_root)
     fit = ensure_fit_analysis(job_path, app_dir=app_dir, provider=provider, repo_root=repo_root)
+    profile_context = load_profile_context(repo_root)
+    fit, _ = sanitize_fit_analysis_safety(fit, profile_context)
 
     app_dir.mkdir(parents=True, exist_ok=True)
     normalized_job_path = app_dir / "job.json"
