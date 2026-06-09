@@ -13,6 +13,7 @@ from ai_job_search.model_provider import ModelResponse
 
 from app.config import Settings
 import app.config as config_module
+from app.services.evidence_tools import APPLICANT_FACING_EVIDENCE_FILES
 from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
 from app.services.processing import (
     ProcessingError,
@@ -151,8 +152,35 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         )
         evidence_cards = brief.get("evidence_cards") or []
         evidence = [str(card.get("text") or "") for card in evidence_cards if isinstance(card, dict)]
-        self.assertGreaterEqual(len(evidence), 3)
-        self.assertIn("BizLink", " ".join(evidence))
+        self.assertEqual(len(evidence), 1)
+        self.assertIn("Contributed feature work, testing-focused improvements", evidence[0])
+
+    def test_cover_letter_brief_uses_only_curated_evidence_cards(self) -> None:
+        brief = build_cover_letter_brief(
+            job={"title": "Application Engineer", "company": "Forterra"},
+            fit={"matched_skills": ["C#", ".NET", "SQL"]},
+            profile_context="Only use verified facts here. Treat this file as the safe source for application materials.",
+            documents_context="doc inventory",
+            identity={"name": "Vincent Morrill", "email": "vince.codefactory@outlook.com"},
+            letter_evidence_cards=[
+                {
+                    "theme": "Enterprise",
+                    "text": "Contributed feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.",
+                    "source_file": "cover_letter_evidence.md",
+                    "claim_boundary": "Do not overclaim.",
+                },
+                {
+                    "theme": "Unsafe",
+                    "text": "Only use verified facts here. Treat this file as the safe source for application materials.",
+                    "source_file": "resume_facts.md",
+                    "claim_boundary": "Do not overclaim.",
+                },
+            ],
+        )
+
+        evidence_cards = brief.get("evidence_cards") or []
+        self.assertEqual(len(evidence_cards), 1)
+        self.assertEqual(evidence_cards[0].get("source_file"), "cover_letter_evidence.md")
 
     def test_cover_letter_brief_excludes_internal_fit_fields(self) -> None:
         brief = build_cover_letter_brief(
@@ -404,12 +432,43 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             ],
         }
         fallback = build_fallback_cover_letter(brief)
-        self.assertIn("Examples include contributing feature work", fallback)
+        self.assertIn("One example is contributing feature work", fallback)
         self.assertNotIn("SQL or relational database work where supported by actual projects.", fallback)
         self.assertNotIn("and SQL and", fallback)
         self.assertNotIn("Add verified", fallback)
         self.assertNotIn("Project Template", fallback)
         self.assertNotIn("claims to avoid", fallback.lower())
+
+    def test_fallback_does_not_use_non_curated_prose(self) -> None:
+        brief = {
+            "role_title": "Application Services Software Engineer",
+            "company": "Forterra",
+            "evidence_cards": [
+                {
+                    "text": "Only use verified facts here. Treat this file as the safe source for application materials.",
+                    "source_file": "resume_facts.md",
+                }
+            ],
+        }
+        fallback = build_fallback_cover_letter(brief)
+        self.assertNotIn("Only use verified facts", fallback)
+        self.assertNotIn("Examples include Only use", fallback)
+        self.assertIn("This hands-on development work gives me", fallback)
+
+    def test_fallback_uses_generic_safe_evidence_when_curated_file_missing(self) -> None:
+        brief = {
+            "role_title": "Application Services Software Engineer",
+            "company": "Forterra",
+            "evidence_cards": [
+                {
+                    "text": "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts.",
+                    "source_file": "generic-safe-fallback",
+                }
+            ],
+        }
+        fallback = build_fallback_cover_letter(brief)
+        self.assertNotIn("One example is", fallback)
+        self.assertIn("This hands-on development work gives me", fallback)
 
     def test_validator_rejects_latest_bad_scaffold_sentences(self) -> None:
         bad_letter = (
@@ -693,11 +752,23 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             self.assertTrue(meta_path.is_file())
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             self.assertEqual(meta.get("source"), "deterministic-fallback")
+            self.assertEqual(meta.get("evidence_mode"), "generic_safe_fallback")
             self.assertTrue(bool(meta.get("fallback_reason")))
             self.assertTrue(meta.get("review_passes_enabled"))
             self.assertTrue(meta.get("tool_access", {}).get("enabled"))
             self.assertIsInstance(meta.get("evidence_cards_used"), list)
-            self.assertEqual(meta.get("tool_access", {}).get("allowed_sources"), list(ALLOWED_PROFILE_EVIDENCE_FILES))
+            self.assertEqual(meta.get("tool_access", {}).get("allowed_sources"), list(APPLICANT_FACING_EVIDENCE_FILES))
+            self.assertEqual(meta.get("applicant_facing_evidence_sources"), [])
+            self.assertEqual(meta.get("reference_context_sources"), [
+                "resume_facts.md",
+                "project_inventory.md",
+                "experience_bullets.md",
+                "skills_inventory.md",
+                "experience_timeline.md",
+                "education.md",
+                "disallowed_claims.md",
+                "generation-constraints.md",
+            ])
             if meta.get("evidence_cards_used"):
                 self.assertIn("source_file", meta["evidence_cards_used"][0])
             self.assertIn("repair_attempted", meta)
@@ -734,7 +805,6 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             original_provider = processing_module.OllamaProvider
             processing_module.OllamaProvider = FakeOllamaProvider
             FakeOllamaProvider.reset([
-                '{"queries":["enterprise workflow evidence"]}',
                 polished_letter(),
                 "- keep tone direct",
                 polished_letter(),
@@ -747,13 +817,27 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             self.assertTrue(output.is_file())
             meta = json.loads((app_dir / "cover-letter.meta.json").read_text(encoding="utf-8"))
             self.assertEqual(meta.get("source"), "model-final")
+            self.assertEqual(meta.get("evidence_mode"), "generic_safe_fallback")
             self.assertIsNone(meta.get("fallback_reason"))
             self.assertIsInstance(meta.get("evidence_cards_used"), list)
-            self.assertEqual(meta.get("tool_access", {}).get("allowed_sources"), list(ALLOWED_PROFILE_EVIDENCE_FILES))
+            self.assertEqual(meta.get("tool_access", {}).get("allowed_sources"), list(APPLICANT_FACING_EVIDENCE_FILES))
             if meta.get("evidence_cards_used"):
                 self.assertIn("source_file", meta["evidence_cards_used"][0])
             self.assertIn("repair_attempted", meta)
             self.assertIn("repair_successful", meta)
+
+    def test_final_validator_rejects_latest_bad_cover_letter_exactly(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra.\n\n"
+            "In recent development work, I have contributed to internal and enterprise-grade systems. "
+            "One example is Only use verified facts here. Treat this file as the safe source for application materials, which gives me a practical foundation for supporting software used in real operational workflows.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("Only use verified facts", str(context.exception))
 
     def test_reason_sanitizer_redacts_keys(self) -> None:
         raw = "failed with X-API-Key=secret-token and api_key=abc123"
