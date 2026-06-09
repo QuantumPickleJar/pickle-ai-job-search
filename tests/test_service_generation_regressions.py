@@ -91,7 +91,7 @@ def polished_letter() -> str:
         "In recent work, I have contributed to internal and enterprise-grade systems by implementing features, "
         "writing unit tests, improving workflow behavior, and collaborating through pull request based delivery. "
         "My experience includes internal university IT applications, benefits and insurance software, and insurance "
-        "quoting workflows that require practical communication and attention to operational reliability under real deadlines.\n\n"
+        "quoting workflows that require practical communication and attention to service reliability under real deadlines.\n\n"
         "I am particularly interested in this opportunity because it combines engineering execution with stakeholder "
         "support and operational problem solving. I would bring a grounded and maintainable development approach, "
         "clear communication with technical and non technical partners, and a strong commitment to steady improvement "
@@ -407,6 +407,9 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         self.assertNotIn("i lack", lowered)
         self.assertNotIn("where supported by actual projects", lowered)
         self.assertNotIn("and sql and", lowered)
+        self.assertNotIn("the team's platform environment", lowered)
+        self.assertNotIn("i am available to share concrete examples", lowered)
+        self.assertNotIn("this hands-on development work", lowered)
 
     def test_polish_evidence_rejects_where_supported_phrase(self) -> None:
         result = polish_evidence_for_cover_letter(
@@ -453,7 +456,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         fallback = build_fallback_cover_letter(brief)
         self.assertNotIn("Only use verified facts", fallback)
         self.assertNotIn("Examples include Only use", fallback)
-        self.assertIn("This hands-on development work gives me", fallback)
+        self.assertIn("Contributed feature work, testing-focused improvements", fallback)
 
     def test_fallback_uses_generic_safe_evidence_when_curated_file_missing(self) -> None:
         brief = {
@@ -468,7 +471,94 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         }
         fallback = build_fallback_cover_letter(brief)
         self.assertNotIn("One example is", fallback)
-        self.assertIn("This hands-on development work gives me", fallback)
+        self.assertIn("Contributed feature work, testing-focused improvements", fallback)
+
+    def test_validator_rejects_nearby_this_sentence_openings(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra because the role fits my C# and .NET background.\n\n"
+            "This hands-on development work improved internal workflows for university systems. "
+            "This work required careful testing and release coordination across shared services.\n\n"
+            "I would bring thoughtful engineering habits and steady collaboration to Forterra's platform environment.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my application experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("begin with 'This'", str(context.exception))
+
+    def test_validator_rejects_repeated_generic_style_words(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra because my C# and .NET background fits the role.\n\n"
+            "One example is contributing feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.\n\n"
+            "I would bring practical communication, practical implementation habits, and careful coordination with technical partners across releases.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("appears too often", str(context.exception))
+
+    def test_validator_rejects_redundant_closing_filler(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra because my C# and .NET background fits the role.\n\n"
+            "One example is contributing feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.\n\n"
+            "I would bring clear implementation habits, testing discipline, and steady collaboration to Forterra's platform environment.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team. I am available to share concrete examples of feature delivery and workflow refinements that align with this role.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("Closing filler detected", str(context.exception))
+
+    def test_validator_rejects_non_specific_platform_environment_phrase(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra because my C# and .NET background fits the role.\n\n"
+            "One example is contributing feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.\n\n"
+            "I would bring clear implementation habits, testing discipline, and a steady approach to maintainable application changes within the team's platform environment.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("Company-specific phrasing required", str(context.exception))
+
+    def test_validator_rejects_second_paragraph_with_generic_follow_up_only(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra because my C# and .NET background fits the role.\n\n"
+            "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts. "
+            "That sentence gives me a practical foundation for supporting software used in real operational workflows.\n\n"
+            "I would bring clear implementation habits, testing discipline, and steady collaboration to Forterra's platform environment.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("Second paragraph stacks a generic evidence sentence", str(context.exception))
+
+    def test_validator_rejects_more_than_four_body_paragraphs(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "Paragraph one for Forterra with C# and .NET context.\n\n"
+            "One example is contributing feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.\n\n"
+            "Paragraph three discusses collaboration with stakeholders and release coordination.\n\n"
+            "Paragraph four discusses application support and maintainable changes in Forterra's platform environment.\n\n"
+            "Paragraph five adds extra commentary that should force rejection because the limit is four body paragraphs.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("More than 4 body paragraphs", str(context.exception))
 
     def test_validator_rejects_latest_bad_scaffold_sentences(self) -> None:
         bad_letter = (

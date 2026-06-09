@@ -27,6 +27,7 @@ from app.services.evidence_tools import list_profile_evidence_sources
 from app.services.evidence_tools import lint_cover_letter_text
 from app.services.evidence_tools import plan_cover_letter_evidence_queries
 from app.services.evidence_tools import search_applicant_facing_evidence
+from app.services.evidence_tools import split_cover_letter_sentences
 from app.services.job_store import is_safe_identifier
 
 
@@ -62,6 +63,65 @@ DEFAULT_CANDIDATE_NAME = "Vincent Morrill"
 DEFAULT_CANDIDATE_EMAIL = "vince.codefactory@outlook.com"
 GENERIC_SAFE_EVIDENCE_SENTENCE = (
     "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts."
+)
+STYLE_LIMITED_PHRASES = (
+    "practical",
+    "reliable",
+    "operational",
+    "maintainability",
+    "stable",
+    "business-critical",
+)
+BLOCKED_CLOSING_PHRASES = (
+    "i am available to share concrete examples",
+    "i am motivated to contribute in a role where",
+)
+CONCRETE_EVIDENCE_ANCHORS = (
+    "bizlink",
+    "insurance quoting",
+    "insurance workflow",
+    "benefits",
+    "applied systems",
+    "applied benefits",
+    "uwo",
+    "university",
+    "portal",
+    "rostar",
+    "pull request",
+    "unit test",
+    "unit-tested",
+    "workflow behavior",
+    "business-rule",
+    "c#",
+    ".net",
+    "sql",
+    "angular",
+    "typescript",
+)
+POLISHED_GENERIC_EVIDENCE_MARKERS = (
+    "contributed feature work",
+    "testing-focused improvements",
+    "workflow refinements",
+    "internal and enterprise-grade application contexts",
+)
+OVERLY_GENERIC_SENTENCE_MARKERS = (
+    "practical foundation",
+    "supporting software used in real operational workflows",
+    "software used in real operational workflows",
+    "stable software behavior",
+    "careful attention to maintainability",
+    "grounded engineering approach",
+    "production-minded problem solving",
+    "willingness to ramp",
+    "clear implementation details",
+    "hands-on development work",
+    "development work gives me",
+    "this work required",
+)
+REPEATED_NOUN_STACK_PHRASES = (
+    "hands-on development work",
+    "development work",
+    "this work",
 )
 
 COVER_LETTER_BLOCKED_PHRASES = [
@@ -384,9 +444,117 @@ def validate_generated_cover_letter(content: str) -> None:
                 "cover letter generation returned unsafe output. "
                 f"Instructional/scaffold source text detected: {matched_fragment(marker)}"
             )
+
+    body_paragraphs = _cover_letter_body_paragraphs(content)
+    if len(body_paragraphs) > 4:
+        raise ProcessingError("cover letter generation returned unsafe output. More than 4 body paragraphs detected.")
+
+    for phrase in BLOCKED_CLOSING_PHRASES:
+        if phrase in lowered:
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. "
+                f"Closing filler detected: {matched_fragment(phrase)}"
+            )
+
+    if "the team's platform environment" in lowered:
+        raise ProcessingError(
+            "cover letter generation returned unsafe output. Company-specific phrasing required instead of 'the team's platform environment'."
+        )
+
+    for phrase in STYLE_LIMITED_PHRASES:
+        count = lowered.count(phrase)
+        if count > 1:
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. "
+                f"Style warning: '{matched_fragment(phrase)}' appears too often ({count} uses)."
+            )
+
+    for index, paragraph in enumerate(body_paragraphs):
+        _validate_cover_letter_paragraph(paragraph, index)
+
     word_count = len(re.findall(r"\b\w+\b", content))
     if word_count < 180 or word_count > 500:
         raise ProcessingError("cover letter generation returned unsafe output. Word count outside acceptable range.")
+
+
+def _cover_letter_body_paragraphs(content: str) -> list[str]:
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", content.strip()) if block.strip()]
+    if not blocks:
+        return []
+
+    signoff_index = next((index for index, block in enumerate(blocks) if block.startswith("Best regards,")), len(blocks))
+    return [block for block in blocks[:signoff_index] if not block.startswith("Dear Hiring Manager,")]
+
+
+def _sentence_has_concrete_evidence_anchor(sentence: str) -> bool:
+    lowered = sentence.casefold()
+    return any(marker in lowered for marker in CONCRETE_EVIDENCE_ANCHORS)
+
+
+def _is_polished_generic_evidence_sentence(sentence: str) -> bool:
+    lowered = sentence.casefold()
+    return sum(1 for marker in POLISHED_GENERIC_EVIDENCE_MARKERS if marker in lowered) >= 2
+
+
+def _is_overly_generic_sentence(sentence: str) -> bool:
+    lowered = sentence.casefold()
+    if _sentence_has_concrete_evidence_anchor(sentence):
+        return False
+    return any(marker in lowered for marker in OVERLY_GENERIC_SENTENCE_MARKERS)
+
+
+def _validate_cover_letter_paragraph(paragraph: str, paragraph_index: int) -> None:
+    lowered = paragraph.casefold()
+    sentences = split_cover_letter_sentences(paragraph)
+    if not sentences:
+        return
+
+    this_starts = [index for index, sentence in enumerate(sentences) if re.match(r"(?i)^this\b", sentence)]
+    for left, right in zip(this_starts, this_starts[1:]):
+        if right - left <= 2:
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. Nearby sentences in one paragraph begin with 'This'."
+            )
+
+    noun_stack_hits = sum(lowered.count(phrase) for phrase in REPEATED_NOUN_STACK_PHRASES)
+    if noun_stack_hits >= 2:
+        raise ProcessingError(
+            "cover letter generation returned unsafe output. Repeated noun stacking detected in one paragraph."
+        )
+
+    for left, right in zip(sentences, sentences[1:]):
+        left_lower = left.casefold()
+        right_lower = right.casefold()
+        if "supporting software used in real operational workflows" in left_lower and any(
+            marker in right_lower for marker in ("operational workflows", "workflow", "supporting software", "software used")
+        ):
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. Back-to-back sentences repeat the same workflow-support concept."
+            )
+
+    has_concrete_anchor = any(_sentence_has_concrete_evidence_anchor(sentence) for sentence in sentences)
+    overly_generic_count = sum(1 for sentence in sentences if _is_overly_generic_sentence(sentence))
+    if not has_concrete_anchor and overly_generic_count > 1:
+        raise ProcessingError(
+            "cover letter generation returned unsafe output. Paragraph uses multiple generic sentences without a concrete evidence anchor."
+        )
+
+    if paragraph_index == 1:
+        has_generic_evidence = any(_is_polished_generic_evidence_sentence(sentence) for sentence in sentences)
+        if not has_concrete_anchor and not has_generic_evidence:
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. Second paragraph needs one concrete evidence anchor or one polished generic evidence sentence."
+            )
+        if has_generic_evidence:
+            generic_follow_up_count = sum(
+                1
+                for sentence in sentences
+                if not _is_polished_generic_evidence_sentence(sentence) and _is_overly_generic_sentence(sentence)
+            )
+            if generic_follow_up_count > 0:
+                raise ProcessingError(
+                    "cover letter generation returned unsafe output. Second paragraph stacks a generic evidence sentence with another generic follow-up sentence."
+                )
 
 
 def _clip_cover_letter_sentence(text: str, limit: int = 220) -> str:
@@ -964,6 +1132,12 @@ Style constraints:
 - Do not overclaim ownership, senior architecture authority, cloud ownership, certifications, or platform expertise.
 - If a skill is not verified, omit it or use neutral ramping language.
 - Prefer one concrete proof paragraph over broad claims.
+- Do not let two nearby sentences in the same paragraph begin with "This".
+- Avoid repeated noun stacking such as "development work", "hands-on development work", and "This work" in one paragraph.
+- Keep the second paragraph anchored by either one concrete evidence card or one polished generic evidence sentence.
+- Avoid repeating generic descriptors such as practical, reliable, operational, stable, maintainability, and business-critical.
+- Prefer company-specific phrasing like "Forterra's platform environment" instead of "the team's platform environment".
+- Keep the letter to 4 body paragraphs or fewer before the sign-off.
 
 Letter Brief JSON:
 {brief_json}
@@ -1256,6 +1430,13 @@ Rubric:
 - avoids saying "ideal candidate"
 - sounds confident but not inflated
 - uses 1 to 2 concrete evidence cards naturally
+- second paragraph contains one concrete evidence anchor or one polished generic evidence sentence
+- does not repeat nearby sentence openings with "This"
+- avoids repeated noun stacking like development work / this work
+- avoids repeated generic descriptors like practical, reliable, operational, stable, maintainability, or business-critical
+- avoids closing filler such as "I am available to share concrete examples..."
+- prefers company-specific phrasing over "the team's platform environment"
+- stays within 4 body paragraphs before the sign-off
 """
 
 
@@ -1277,6 +1458,11 @@ Requirements:
 - no headings, no bullets, no code fences
 - use 1 to 2 concrete evidence cards from evidence_cards
 - avoid generic filler and avoid broad claims without concrete evidence
+- avoid repeated "This" openings in the same paragraph
+- avoid repeated noun stacking like development work / this work
+- avoid repeated generic descriptors like practical, reliable, operational, stable, maintainability, or business-critical
+- prefer company-specific phrasing over "the team's platform environment"
+- keep the letter to 4 body paragraphs or fewer before the sign-off
 
 Letter Brief JSON:
 {brief_json}
@@ -1311,6 +1497,13 @@ Rules:
 - Do not use phrases like where verified, where supported, Placeholder, TODO, or or ... where verified.
 - If a technology is not safe to claim, omit it rather than writing verification language.
 - Keep the letter factual, concise, and sendable.
+- Do not let two nearby sentences in the same paragraph begin with "This".
+- Remove repeated noun stacking like development work / hands-on development work / this work.
+- Remove repeated generic descriptors such as practical, reliable, operational, stable, maintainability, and business-critical.
+- Remove closing filler like "I am available to share concrete examples..." when the paragraph already invites discussion.
+- Prefer company-specific phrasing over "the team's platform environment".
+- Keep the second paragraph anchored by one concrete evidence card or one polished generic evidence sentence.
+- Keep the letter to 4 body paragraphs or fewer before the sign-off.
 
 Letter Brief JSON:
 {brief_json}
@@ -1346,17 +1539,24 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     ]
 
     if polished_evidence:
-        evidence_clause = f"One example is {polished_evidence[0]}, which gives me a practical foundation for supporting software used in real operational workflows."
+        second_paragraph = (
+            "One example is "
+            f"{polished_evidence[0]}. "
+            "That experience involved translating business rules into dependable application behavior, validating changes with tests, and refining workflow behavior for internal users who depended on the software in day-to-day work."
+        )
     else:
-        evidence_clause = "This hands-on development work gives me a practical foundation for supporting software used in real operational workflows."
+        second_paragraph = (
+            "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts, "
+            "including changes that had to be checked carefully, understood by teammates, and rolled out without disrupting day-to-day use."
+        )
 
     letter = (
         "Dear Hiring Manager,\n\n"
-        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with the role's focus on maintaining and improving business-critical application services.\n\n"
-        "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. "
-        f"{evidence_clause} This work required translating business rules into reliable behavior, validating changes with tests, and delivering improvements that can be maintained by teams over time.\n\n"
-        "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I focus on practical delivery, clear implementation details, and stable software behavior in day-to-day operations.\n\n"
-        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team. I am available to share concrete examples of feature delivery, testing-focused improvements, and workflow refinements that align with this role.\n\n"
+        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with {company}'s focus on maintaining and improving business-critical application services. "
+        "I have worked in internal application settings where clear handoff, careful testing, and dependable follow-through matter to the people using the software.\n\n"
+        f"{second_paragraph}\n\n"
+        f"What interests me about this role is the mix of software delivery, stakeholder support, and day-to-day problem solving. I would bring clear implementation habits, testing discipline, and a steady approach to maintainable application changes within {company}'s platform environment. That includes tracing issues carefully, communicating tradeoffs clearly, and following changes through validation before they reach production use.\n\n"
+        f"Thank you for your consideration. I would welcome a conversation about how my C#/.NET application experience can support {company}'s team and help keep application changes understandable, testable, and useful for the people who rely on them each day.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
     )
