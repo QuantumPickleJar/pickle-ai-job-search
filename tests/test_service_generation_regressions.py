@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -11,6 +12,7 @@ sys.path.insert(0, str(REPO_ROOT / "service"))
 from ai_job_search.model_provider import ModelResponse
 
 from app.config import Settings
+import app.config as config_module
 from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
 from app.services.processing import (
     ProcessingError,
@@ -448,6 +450,42 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         message = str(context.exception)
         self.assertIn("Sentence rule", message)
         self.assertIn("Relevant coursework or projects: TODO", message)
+
+    def test_validator_rejects_exact_examples_include_tags_sentence(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "In recent development work, I have contributed to internal and enterprise-grade systems. "
+            "Examples include Tags: C#, .NET, ASP.NET, Entity-Framework, giving me a practical foundation for supporting software used in real operational workflows.\n\n"
+            "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team in a practical and collaborative way across production services.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        message = str(context.exception)
+        self.assertIn("Sentence rule", message)
+        self.assertIn("Tags: C#, .NET, ASP.NET, Entity-Framework", message)
+
+    def test_polish_evidence_rejects_tags_label_scaffold(self) -> None:
+        result = polish_evidence_for_cover_letter(
+            "Tags: C#, .NET, ASP.NET, Entity-Framework"
+        )
+        self.assertEqual(result, "")
+
+    def test_settings_accepts_legacy_max_repair_passes_env_var(self) -> None:
+        original = {key: os.environ.get(key) for key in ("COVER_LETTER_REPAIR_PASSES", "COVER_LETTER_MAX_REPAIR_PASSES")}
+        try:
+            os.environ.pop("COVER_LETTER_REPAIR_PASSES", None)
+            os.environ["COVER_LETTER_MAX_REPAIR_PASSES"] = "4"
+            settings = config_module.Settings.from_env()
+        finally:
+            for key, value in original.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(settings.cover_letter_repair_passes, 4)
 
     def test_build_cover_letter_repair_prompt_mentions_validation_error(self) -> None:
         prompt = build_cover_letter_repair_prompt(

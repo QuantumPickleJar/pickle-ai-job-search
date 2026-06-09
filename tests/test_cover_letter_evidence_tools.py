@@ -178,6 +178,30 @@ class CoverLetterEvidenceToolTests(unittest.TestCase):
             self.assertNotIn("relevant coursework or projects: todo", joined)
             self.assertTrue(is_dirty_cover_letter_text("Relevant coursework or projects: TODO"))
 
+    def test_search_rejects_tags_label_snippets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            profile = root / "profile"
+            profile.mkdir(parents=True, exist_ok=True)
+            (profile / "resume_facts.md").write_text(
+                "- Tags: C#, .NET, ASP.NET, Entity-Framework",
+                encoding="utf-8",
+            )
+            (profile / "cover_letter_evidence.md").write_text(
+                "- Contributed feature work and unit-tested business-rule changes in BizLink.",
+                encoding="utf-8",
+            )
+
+            cards = search_profile_evidence(
+                self.make_settings(root),
+                "C# .NET BizLink evidence",
+                ["Enterprise workflow"],
+                max_results=5,
+            )
+            joined = " ".join(card["text"].lower() for card in cards)
+            self.assertNotIn("tags:", joined)
+            self.assertTrue(is_dirty_cover_letter_text("Tags: C#, .NET, ASP.NET, Entity-Framework"))
+
     def test_build_evidence_queries_supports_budget_up_to_10(self) -> None:
         queries = build_evidence_queries(
             {"title": "Application Services Software Engineer", "company": "Forterra"},
