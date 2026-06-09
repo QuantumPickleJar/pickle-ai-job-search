@@ -61,6 +61,10 @@ SCAFFOLD_PHRASE_MARKERS = (
     "safe claims:",
     "claims to avoid:",
     "add only projects",
+    "tags:",
+    "tag:",
+    "keywords:",
+    "keyword:",
 )
 
 TEMPLATE_ONLY_HEADINGS = {
@@ -77,6 +81,10 @@ TEMPLATE_LABEL_PREFIXES = (
     "purpose:",
     "role:",
     "technologies:",
+    "tags:",
+    "tag:",
+    "keywords:",
+    "keyword:",
     "what was built:",
     "outcome:",
     "safe claims:",
@@ -112,6 +120,10 @@ DIRTY_EVIDENCE_MARKERS = (
     "purpose:",
     "role:",
     "technologies:",
+    "tags:",
+    "tag:",
+    "keywords:",
+    "keyword:",
     "what was built:",
     "outcome:",
 )
@@ -308,6 +320,10 @@ def lint_cover_letter_sentence(sentence: str) -> list[CoverLetterQualityIssue]:
         "candidate project leads",
         "missing details",
         "technical skills to verify",
+        "tags:",
+        "tag:",
+        "keywords:",
+        "keyword:",
     )
     if any(marker in lowered for marker in banned_markers):
         add("verification_scaffold", "Sentence includes scaffold/verification language")
@@ -322,11 +338,17 @@ def lint_cover_letter_sentence(sentence: str) -> list[CoverLetterQualityIssue]:
         "examples include purpose:",
         "examples include role:",
         "examples include technologies:",
+        "examples include tags:",
+        "examples include tag:",
+        "examples include keywords:",
         "sql or",
         "c#, .net",
     )
     if any(lowered.startswith(prefix) for prefix in starts_with_blocks):
         add("choppy_scaffold_fragment", "Sentence starts with a scaffold fragment")
+
+    if re.search(r"\b(tags?|keywords?):\s*[a-z0-9#.,+\-/ ]{3,}", lowered):
+        add("metadata_label_fragment", "Sentence includes metadata/label text instead of applicant-facing prose")
 
     if ". sql or" in lowered or "and sql and" in lowered:
         add("grammar_fragment", "Sentence contains a broken grammar fragment")

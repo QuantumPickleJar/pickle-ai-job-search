@@ -320,6 +320,9 @@ def validate_generated_cover_letter(content: str) -> None:
         "examples include context:",
         "examples include purpose:",
         "examples include role:",
+        "examples include tags:",
+        "examples include tag:",
+        "examples include keywords:",
         "examples include relevant",
         "examples include todo",
     )
@@ -407,6 +410,10 @@ def polish_evidence_for_cover_letter(evidence_text: str) -> str:
         "candidate project leads",
         "missing details",
         "technical skills to verify",
+        "tags:",
+        "tag:",
+        "keywords:",
+        "keyword:",
     )
     if any(marker in lowered for marker in blocked):
         return ""
@@ -422,7 +429,20 @@ def polish_evidence_for_cover_letter(evidence_text: str) -> str:
         return ""
     if any(
         lowered.startswith(prefix)
-        for prefix in ("context:", "purpose:", "role:", "technologies:", "what was built:", "outcome:", "safe claims:", "claims to avoid:")
+        for prefix in (
+            "context:",
+            "purpose:",
+            "role:",
+            "technologies:",
+            "tags:",
+            "tag:",
+            "keywords:",
+            "keyword:",
+            "what was built:",
+            "outcome:",
+            "safe claims:",
+            "claims to avoid:",
+        )
     ):
         return ""
 
@@ -467,6 +487,10 @@ def is_safe_cover_letter_evidence_fragment(text: str) -> bool:
         "manual review notes",
         "known technical areas",
         "candidate project leads",
+        "tags:",
+        "tag:",
+        "keywords:",
+        "keyword:",
     )
     if any(marker in lowered for marker in blocked):
         return False
