@@ -11,17 +11,21 @@ sys.path.insert(0, str(REPO_ROOT / "service"))
 from ai_job_search.model_provider import ModelResponse
 
 from app.config import Settings
+from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
 from app.services.processing import (
     ProcessingError,
     build_cover_letter_brief,
     build_fallback_cover_letter,
     build_cover_letter_prompt,
+    build_cover_letter_repair_prompt,
     generate_cover_letter,
     generate_cover_letter_with_review,
     is_internal_only_requirement,
     sanitize_cover_letter_reason,
     build_profile_context,
+    polish_evidence_for_cover_letter,
     sanitize_generated_cover_letter,
+    validate_cover_letter_brief,
     validate_generated_cover_letter,
 )
 from app.ui.views import task_table
@@ -172,6 +176,36 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         self.assertNotIn("Power Platform", brief_text)
         self.assertEqual(brief.get("location"), "")
 
+    def test_cover_letter_brief_validation_rejects_dirty_evidence(self) -> None:
+        brief = {
+            "role_title": "Application Services Software Engineer",
+            "company": "Forterra",
+            "candidate_name": "Vincent Morrill",
+            "matched_skills": ["C#", ".NET"],
+            "safe_resume_keywords": ["SQL"],
+            "evidence_cards": [
+                {"text": "Relevant coursework or projects: TODO", "source_file": "project_inventory.md"}
+            ],
+        }
+        with self.assertRaises(ProcessingError):
+            validate_cover_letter_brief(brief)
+
+    def test_cover_letter_brief_validation_accepts_clean_cards(self) -> None:
+        brief = {
+            "role_title": "Application Services Software Engineer",
+            "company": "Forterra",
+            "candidate_name": "Vincent Morrill",
+            "matched_skills": ["C#", ".NET"],
+            "safe_resume_keywords": ["SQL"],
+            "evidence_cards": [
+                {
+                    "text": "Contributed feature work and unit-tested business-rule changes in BizLink.",
+                    "source_file": "cover_letter_evidence.md",
+                }
+            ],
+        }
+        validate_cover_letter_brief(brief)
+
     def test_internal_requirement_detector(self) -> None:
         self.assertTrue(is_internal_only_requirement("Minimum 2-3 years of software engineering experience"))
         self.assertTrue(is_internal_only_requirement("Must have Azure and Power Platform"))
@@ -253,8 +287,11 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             "role_title": "Application Services Software Engineer",
             "company": "Forterra",
             "matched_skills": ["C#", ".NET Core", "SQL", "enterprise application development"],
-            "evidence_bullets": [
-                "Contributed feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.",
+            "evidence_cards": [
+                {
+                    "text": "Contributed feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.",
+                    "source_file": "cover_letter_evidence.md",
+                },
             ],
         }
         fallback = build_fallback_cover_letter(brief)
@@ -263,7 +300,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         self.assertIn("Best regards", fallback)
         self.assertIn("Vincent Morrill", fallback)
         self.assertIn("enterprise", lowered)
-        self.assertIn("C#, .NET Core, and SQL", fallback)
+        self.assertIn("C#, .NET Core, SQL, and enterprise application development", fallback)
         self.assertNotIn("role's focus and scope", lowered)
         self.assertLessEqual(lowered.count("business-critical"), 1)
         self.assertNotIn("transparent communication, measurable outcomes", lowered)
@@ -273,6 +310,165 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         self.assertNotIn("microsoft 365", lowered)
         self.assertNotIn("azure", lowered)
         self.assertNotIn("i lack", lowered)
+        self.assertNotIn("where supported by actual projects", lowered)
+        self.assertNotIn("and sql and", lowered)
+
+    def test_polish_evidence_rejects_where_supported_phrase(self) -> None:
+        result = polish_evidence_for_cover_letter(
+            "My experience includes C#, .NET, ASP.NET, or .NET Core work where supported by actual projects."
+        )
+        self.assertEqual(result, "")
+
+    def test_polish_evidence_rejects_add_verified_scaffold(self) -> None:
+        result = polish_evidence_for_cover_letter(
+            "Add verified academic, internship, professional, and personal projects here"
+        )
+        self.assertEqual(result, "")
+
+    def test_fallback_uses_clean_evidence_phrase_when_available(self) -> None:
+        brief = {
+            "role_title": "Application Services Software Engineer",
+            "company": "Forterra",
+            "evidence_cards": [
+                {
+                    "text": "Contributed feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.",
+                    "source_file": "cover_letter_evidence.md",
+                }
+            ],
+        }
+        fallback = build_fallback_cover_letter(brief)
+        self.assertIn("Examples include contributing feature work", fallback)
+        self.assertNotIn("SQL or relational database work where supported by actual projects.", fallback)
+        self.assertNotIn("and SQL and", fallback)
+        self.assertNotIn("Add verified", fallback)
+        self.assertNotIn("Project Template", fallback)
+        self.assertNotIn("claims to avoid", fallback.lower())
+
+    def test_validator_rejects_latest_bad_scaffold_sentences(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "My experience includes C#, .NET, ASP.NET, or .NET Core work where supported by actual projects. "
+            "SQL or relational database work where supported by actual projects.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError):
+            validate_generated_cover_letter(bad_letter)
+
+    def test_validator_rejects_exact_examples_include_add_sentence(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "In recent development work, I have contributed to internal and enterprise-grade systems. "
+            "Examples include Add verified academic, internship, professional, and personal projects here, "
+            "giving me a practical foundation for supporting software used in real operational workflows.\n\n"
+            "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application "
+            "development experience can support your team in a practical and collaborative way across production services.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError):
+            validate_generated_cover_letter(bad_letter)
+
+    def test_validator_rejects_exact_examples_include_relevant_todo_sentence(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "In recent development work, I have contributed to internal and enterprise-grade systems. "
+            "Examples include Relevant coursework or projects: TODO, giving me a practical foundation for supporting software used in real operational workflows.\n\n"
+            "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team in a practical and collaborative way across production services.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError):
+            validate_generated_cover_letter(bad_letter)
+
+    def test_build_cover_letter_repair_prompt_mentions_validation_error(self) -> None:
+        prompt = build_cover_letter_repair_prompt(
+            {
+                "role_title": "Application Services Software Engineer",
+                "company": "Forterra",
+                "candidate_name": "Vincent Morrill",
+                "evidence_cards": [{"text": "Contributed feature work in BizLink."}],
+            },
+            "Examples include Relevant coursework or projects: TODO",
+            "Blocked phrase found: todo",
+        )
+        self.assertIn("Validation error", prompt)
+        self.assertIn("Relevant coursework or projects: TODO", prompt)
+
+    def test_repair_pass_attempted_before_fallback(self) -> None:
+        provider = FakeProvider(
+            responses=[
+                polished_letter(),
+                "- remove scaffold text",
+                "Dear Hiring Manager,\n\nExamples include Relevant coursework or projects: TODO\n\nBest regards,\n\nVincent Morrill",
+                polished_letter(),
+            ]
+        )
+
+        result = generate_cover_letter_with_review(
+            job={"title": "Application Services Software Engineer", "company": "Forterra"},
+            fit={"matched_skills": ["C#", ".NET", "SQL"]},
+            profile_context="verified profile facts",
+            documents_context="document inventory",
+            identity={"name": "Vincent Morrill", "email": "vince.codefactory@outlook.com"},
+            settings=None,
+            provider=provider,
+            review_passes=True,
+        )
+
+        self.assertEqual(result.source, "model-repaired")
+        self.assertTrue(result.repair_attempted)
+        self.assertTrue(result.repair_successful)
+        self.assertIsNone(result.fallback_reason)
+
+    def test_fallback_only_after_final_and_repair_fail(self) -> None:
+        provider = FakeProvider(
+            responses=[
+                polished_letter(),
+                "- remove scaffold text",
+                "Dear Hiring Manager,\n\nExamples include Relevant coursework or projects: TODO\n\nBest regards,\n\nVincent Morrill",
+                "Dear Hiring Manager,\n\nExamples include TODO\n\nBest regards,\n\nVincent Morrill",
+            ]
+        )
+
+        result = generate_cover_letter_with_review(
+            job={"title": "Application Services Software Engineer", "company": "Forterra"},
+            fit={"matched_skills": ["C#", ".NET", "SQL"]},
+            profile_context="verified profile facts",
+            documents_context="document inventory",
+            identity={"name": "Vincent Morrill", "email": "vince.codefactory@outlook.com"},
+            settings=None,
+            provider=provider,
+            review_passes=True,
+        )
+
+        self.assertEqual(result.source, "deterministic-fallback")
+        self.assertTrue(result.repair_attempted)
+        self.assertFalse(result.repair_successful)
+
+    def test_validator_accepts_polished_fallback_letter(self) -> None:
+        brief = {
+            "role_title": "Application Services Software Engineer",
+            "company": "Forterra",
+            "evidence_cards": [
+                {
+                    "text": "Contributed feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.",
+                    "source_file": "cover_letter_evidence.md",
+                }
+            ],
+        }
+        fallback = build_fallback_cover_letter(brief)
+        validate_generated_cover_letter(fallback)
+
+    def test_validator_rejects_and_sql_and_fragment(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "My background in C#, .NET Core, and SQL and enterprise application development supports this role.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError):
+            validate_generated_cover_letter(bad_letter)
 
     def test_multi_pass_generation_calls_model_three_times(self) -> None:
         provider = FakeProvider(
@@ -323,7 +519,9 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         )
 
         self.assertEqual(result.source, "deterministic-fallback")
-        self.assertEqual(result.model_query_count_actual, 3)
+        self.assertEqual(result.model_query_count_actual, 4)
+        self.assertTrue(result.repair_attempted)
+        self.assertFalse(result.repair_successful)
         self.assertIsNotNone(result.fallback_reason)
         self.assertIn("failed validation", (result.fallback_reason or "").lower())
         self.assertIn("I am applying for", result.content)
@@ -393,6 +591,13 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             self.assertTrue(meta.get("review_passes_enabled"))
             self.assertTrue(meta.get("tool_access", {}).get("enabled"))
             self.assertIsInstance(meta.get("evidence_cards_used"), list)
+            self.assertEqual(meta.get("tool_access", {}).get("allowed_sources"), list(ALLOWED_PROFILE_EVIDENCE_FILES))
+            if meta.get("evidence_cards_used"):
+                self.assertIn("source_file", meta["evidence_cards_used"][0])
+            self.assertIn("repair_attempted", meta)
+            self.assertIn("repair_successful", meta)
+            self.assertIn("evidence_query_count_actual", meta)
+            self.assertIn("dirty_evidence_rejected_count", meta)
 
     def test_generate_cover_letter_writes_meta_with_model_final_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -438,6 +643,11 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             self.assertEqual(meta.get("source"), "model-final")
             self.assertIsNone(meta.get("fallback_reason"))
             self.assertIsInstance(meta.get("evidence_cards_used"), list)
+            self.assertEqual(meta.get("tool_access", {}).get("allowed_sources"), list(ALLOWED_PROFILE_EVIDENCE_FILES))
+            if meta.get("evidence_cards_used"):
+                self.assertIn("source_file", meta["evidence_cards_used"][0])
+            self.assertIn("repair_attempted", meta)
+            self.assertIn("repair_successful", meta)
 
     def test_reason_sanitizer_redacts_keys(self) -> None:
         raw = "failed with X-API-Key=secret-token and api_key=abc123"
