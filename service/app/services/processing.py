@@ -905,7 +905,7 @@ Rubric:
 - avoids generic filler such as "robust solutions that seamlessly integrate"
 - avoids saying "ideal candidate"
 - sounds confident but not inflated
-- uses 1 to 2 concrete evidence bullets naturally
+- uses 1 to 2 concrete evidence cards naturally
 """
 
 
