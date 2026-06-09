@@ -7,7 +7,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "service"))
 
 from app.config import Settings
-from app.services.processing import build_cover_letter_prompt, build_profile_context
+from app.services.processing import (
+    ProcessingError,
+    build_cover_letter_prompt,
+    build_profile_context,
+    validate_generated_cover_letter,
+)
 from app.ui.views import task_table
 
 
@@ -34,7 +39,10 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
     def test_cover_letter_prompt_includes_profile_context_and_constraints(self) -> None:
         prompt = build_cover_letter_prompt(
             {"title": "Software Engineer", "company": "OneStream"},
-            {"cover_letter_angle": "Highlight enterprise application contribution."},
+            {
+                "cover_letter_angle": "Highlight enterprise application contribution.",
+                "missing_skills": ["Power Platform"],
+            },
             "Notes section",
             "Profile says BizLink is enterprise application experience.",
             "Supporting docs",
@@ -43,6 +51,20 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         self.assertIn("Profile says BizLink", prompt)
         self.assertIn("Do not say the candidate lacks enterprise application experience.", prompt)
         self.assertIn("Do not describe the candidate as architecture owner", prompt)
+        self.assertIn("Vincent Morrill", prompt)
+        self.assertNotIn("[Candidate Name]", prompt)
+        self.assertNotIn('"missing_skills"', prompt)
+        self.assertIn("Internal-only missing skill risks", prompt)
+
+    def test_cover_letter_validator_rejects_forterra_bad_sentence(self) -> None:
+        with self.assertRaises(ProcessingError):
+            validate_generated_cover_letter(
+                "I am actively deepening my experience with enterprise tooling and I do not meet Minimum 2-3 years."
+            )
+
+    def test_cover_letter_validator_rejects_candidate_placeholder(self) -> None:
+        with self.assertRaises(ProcessingError):
+            validate_generated_cover_letter("Best regards,\n[Candidate Name]")
 
     def test_build_profile_context_includes_enterprise_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
