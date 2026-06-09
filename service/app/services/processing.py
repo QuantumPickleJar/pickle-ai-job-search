@@ -23,6 +23,19 @@ class ProcessingError(RuntimeError):
 DEFAULT_CANDIDATE_NAME = "Vincent Morrill"
 DEFAULT_CANDIDATE_EMAIL = "vince.codefactory@outlook.com"
 
+COVER_LETTER_BLOCKED_PHRASES = [
+    "[candidate name]",
+    "[your name]",
+    "[mention",
+    "minimum 2-3 years",
+    "actively deepening my experience with",
+    "i do not meet",
+    "i don't meet",
+    "i lack",
+    "lacks the minimum",
+    "limited exposure",
+]
+
 
 COVER_LETTER_SYSTEM_PROMPT = """You write concise, factual, role-targeted cover letters.
 
@@ -115,10 +128,21 @@ def generate_cover_letter(application_id: str, settings: Settings) -> Path:
     content = response.text.strip()
     if not content:
         raise ProcessingError("cover letter generation returned empty content")
+    validate_generated_cover_letter(content)
 
     output_path = app_dir / "cover-letter.md"
     output_path.write_text(content + "\n", encoding="utf-8")
     return output_path
+
+
+def validate_generated_cover_letter(content: str) -> None:
+    lowered = content.lower()
+    for phrase in COVER_LETTER_BLOCKED_PHRASES:
+        if phrase in lowered:
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. "
+                f"Blocked phrase found: {phrase}"
+            )
 
 
 def read_json_file(path: Path, label: str) -> dict[str, Any]:
@@ -489,13 +513,22 @@ def build_cover_letter_prompt(
     documents_context: str,
 ) -> str:
     job_json = json.dumps(job, ensure_ascii=False, indent=2)
-    fit_json = json.dumps(fit, ensure_ascii=False, indent=2)
+    fit_for_letter = dict(fit)
+    internal_missing_skills = [
+        str(item).strip() for item in fit_for_letter.pop("missing_skills", []) if str(item).strip()
+    ]
+    fit_json = json.dumps(fit_for_letter, ensure_ascii=False, indent=2)
+    internal_risk_note = "None."
+    if internal_missing_skills:
+        internal_risk_note = ", ".join(internal_missing_skills)
     return f"""Write a complete, job-specific cover letter in Markdown.
 
 Output format:
 - Start with a greeting line: "Dear Hiring Manager,"
 - 3 to 5 short paragraphs
-- End with a sign-off and candidate placeholder name: "Best regards,\n[Candidate Name]"
+- End with this exact sign-off block:
+    Best regards,
+    Vincent Morrill
 
 Style constraints:
 - Professional and direct
@@ -505,6 +538,9 @@ Style constraints:
 - Do not say the candidate lacks enterprise application experience.
 - If needed, phrase gaps as senior architecture ownership scope, not enterprise exposure.
 - Do not describe the candidate as architecture owner of BizLink, AgencyPortal, PowerWriter, ImageRight, UWO Portal, or Applied benefits platform.
+- Never include self-disqualifying phrases such as "I do not meet", "I don't meet", "I lack", "lacks the minimum", "limited exposure", or "actively deepening my experience with".
+- Do not include placeholder markers for candidate identity or template notes.
+- Missing skills are internal risk context only and must not appear in final prose.
 
 Candidate profile context:
 {profile_context}
@@ -517,6 +553,9 @@ Job context JSON:
 
 Fit analysis JSON:
 {fit_json}
+
+Internal-only missing skill risks (do not include in the final letter):
+{internal_risk_note}
 
 Cover letter notes:
 {notes}
