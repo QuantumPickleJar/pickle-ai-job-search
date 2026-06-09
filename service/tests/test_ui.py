@@ -81,6 +81,27 @@ class UiSafetyTests(unittest.TestCase):
         self.assertIn("/ui/applications/app-123", rendered)
         self.assertIn("/ui/tasks/", rendered)
 
+    def test_task_table_renders_delete_controls_when_selectable(self) -> None:
+        rendered = task_table(
+            [
+                {
+                    "task_id": "b" * 32,
+                    "job_id": "job-123",
+                    "application_id": "app-123",
+                    "task_type": "generate-cover-letter",
+                    "state": "failed",
+                    "error": "cover letter generation failed",
+                    "updated_at": "2026-06-09T10:00:00+00:00",
+                }
+            ],
+            selectable=True,
+        )
+
+        self.assertIn('action="/ui/tasks/delete"', rendered)
+        self.assertIn('name="task_ids"', rendered)
+        self.assertIn('action="/ui/tasks/' + ("b" * 32) + '/delete"', rendered)
+        self.assertIn("Delete selected tasks", rendered)
+
     def test_task_detail_page_renders_error_text(self) -> None:
         with TemporaryDirectory(prefix="ui-task-detail-") as temporary_dir:
             data_dir = Path(temporary_dir)
@@ -122,6 +143,7 @@ class UiSafetyTests(unittest.TestCase):
         self.assertIn("Open workspace", body)
         self.assertIn("Model query progress", body)
         self.assertIn("Observed model queries during this task: <strong>2</strong>", body)
+        self.assertIn("Delete task", body)
 
 
 if __name__ == "__main__":

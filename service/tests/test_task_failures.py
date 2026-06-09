@@ -57,6 +57,26 @@ class TaskFailureTests(unittest.TestCase):
         self.assertNotIn(r"F:\AI\models\blobs\sha256-abcdef123456", sanitized)
         self.assertIn("<ollama-blob-path>", sanitized)
 
+    def test_task_store_delete_removes_single_task(self) -> None:
+        with TemporaryDirectory(prefix="task-delete-") as temporary_dir:
+            store = TaskStore(Path(temporary_dir))
+            task = store.create("job-abc", task_type="generate-cover-letter", application_id="app-abc")
+
+            store.delete(str(task["task_id"]))
+
+            self.assertEqual(store.list(), [])
+
+    def test_task_store_delete_many_removes_multiple_tasks(self) -> None:
+        with TemporaryDirectory(prefix="task-delete-many-") as temporary_dir:
+            store = TaskStore(Path(temporary_dir))
+            first = store.create("job-1", task_type="generate-cover-letter", application_id="app-1")
+            second = store.create("job-2", task_type="generate-cv", application_id="app-2")
+
+            deleted = store.delete_many([str(first["task_id"]), str(second["task_id"])])
+
+            self.assertEqual(deleted, 2)
+            self.assertEqual(store.list(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -195,7 +195,7 @@ def application_table(applications: Iterable[dict[str, Any]]) -> str:
 """
 
 
-def task_table(tasks: Iterable[dict[str, Any]]) -> str:
+def task_table(tasks: Iterable[dict[str, Any]], *, selectable: bool = False) -> str:
     rows = []
     for task in tasks:
         task_id = escape(str(task.get("task_id", "")), quote=True)
@@ -231,6 +231,11 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
 
         if task_id:
             result_parts.append(f'<a href="/ui/tasks/{task_id}">Task details</a>')
+            result_parts.append(
+                f'<form method="post" action="/ui/tasks/{task_id}/delete" class="inline-form">'
+                '<button class="button button-small button-secondary" type="submit">Delete</button>'
+                '</form>'
+            )
 
         result = "<br>".join(result_parts)
         target_href = (
@@ -248,6 +253,7 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
         rows.append(
             f"""
 <tr>
+    {f'<td><input type="checkbox" name="task_ids" value="{task_id}"></td>' if selectable else ''}
   <td><a class="primary-link" href="{target_href}">{target_label}</a></td>
     <td>{escape(task_label)}</td>
     <td>{status_badge(state)}</td>
@@ -258,15 +264,23 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
         )
     if not rows:
         return empty_state("No processing tasks", "Queued fit-scoring tasks will appear here.")
-    return f"""
+    table_html = f"""
 <div class="table-wrap">
 <table>
-    <thead><tr><th>Job</th><th>Task</th><th>State</th><th>Result</th><th>Updated</th></tr></thead>
+    <thead><tr>{'<th>Select</th>' if selectable else ''}<th>Job</th><th>Task</th><th>State</th><th>Result</th><th>Updated</th></tr></thead>
   <tbody>{''.join(rows)}</tbody>
 </table>
 </div>
 """
-
+    if not selectable:
+        return table_html
+    return (
+        '<form method="post" action="/ui/tasks/delete" class="bulk-task-form">'
+        + table_html
+        + '<div class="form-actions"><button class="button button-secondary" type="submit">Delete selected tasks</button></div>'
+        + '</form>'
+    )
+    
 
 def task_progress_flow(task: dict[str, Any]) -> str:
     task_type = str(task.get("task_type") or "process-job")

@@ -237,6 +237,35 @@ class CoverLetterEvidenceToolTests(unittest.TestCase):
             )
             self.assertEqual(cards, [])
 
+    def test_claim_boundary_sanitizes_disallowed_claim_headings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            profile = root / "profile"
+            profile.mkdir(parents=True, exist_ok=True)
+            (profile / "cover_letter_evidence.md").write_text(
+                "- Used Docker in hands-on development workflows for local application work.",
+                encoding="utf-8",
+            )
+            (profile / "disallowed_claims.md").write_text(
+                "# Disallowed Claims\n\n"
+                "## Explicitly Disallowed Unless Verified\n\n"
+                "- Docker may be described only at the level supported by actual use.\n",
+                encoding="utf-8",
+            )
+
+            cards = search_profile_evidence(
+                self.make_settings(root),
+                "Docker application workflow evidence",
+                ["Docker"],
+                max_results=3,
+            )
+
+            self.assertGreaterEqual(len(cards), 1)
+            claim_boundary = cards[0].get("claim_boundary") or ""
+            self.assertIn("Keep Docker references conservative", claim_boundary)
+            self.assertNotIn("## Explicitly Disallowed Unless Verified", claim_boundary)
+            self.assertNotIn("supported by actual use", claim_boundary)
+
 
 if __name__ == "__main__":
     unittest.main()

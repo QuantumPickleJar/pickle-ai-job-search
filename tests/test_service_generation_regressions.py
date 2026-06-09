@@ -176,7 +176,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         self.assertNotIn("Power Platform", brief_text)
         self.assertEqual(brief.get("location"), "")
 
-    def test_cover_letter_brief_validation_rejects_dirty_evidence(self) -> None:
+    def test_cover_letter_brief_validation_reports_detailed_placeholder_issue(self) -> None:
         brief = {
             "role_title": "Application Services Software Engineer",
             "company": "Forterra",
@@ -184,11 +184,76 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             "matched_skills": ["C#", ".NET"],
             "safe_resume_keywords": ["SQL"],
             "evidence_cards": [
-                {"text": "Relevant coursework or projects: TODO", "source_file": "project_inventory.md"}
+                {
+                    "theme": "Platform experience",
+                    "text": "Placeholder: Worked with C#, .NET, ASP.NET, .NET Core, or Entity Framework where verified by project history",
+                    "source_file": "cover_letter_evidence.md",
+                    "claim_boundary": "Do not overclaim ownership.",
+                }
             ],
         }
-        with self.assertRaises(ProcessingError):
+        with self.assertRaises(ProcessingError) as context:
             validate_cover_letter_brief(brief)
+        message = str(context.exception)
+        self.assertIn("evidence_cards[0].text", message)
+        self.assertRegex(message, r"verification_scaffold|skill_list_verification_pattern")
+        self.assertIn("Placeholder: Worked with C#, .NET, ASP.NET, .NET Core", message)
+        self.assertNotIn("contains sentence-level scaffold/template issues", message)
+
+    def test_cover_letter_brief_validation_reports_detailed_todo_issue(self) -> None:
+        brief = {
+            "role_title": "Application Services Software Engineer",
+            "company": "Forterra",
+            "candidate_name": "Vincent Morrill",
+            "matched_skills": ["C#", ".NET"],
+            "safe_resume_keywords": ["SQL"],
+            "evidence_cards": [
+                {
+                    "theme": "Profile evidence",
+                    "text": "Relevant coursework or projects: TODO",
+                    "source_file": "project_inventory.md",
+                    "claim_boundary": "Do not overclaim ownership.",
+                }
+            ],
+        }
+        with self.assertRaises(ProcessingError) as context:
+            validate_cover_letter_brief(brief)
+        message = str(context.exception)
+        self.assertIn("evidence_cards[0].text", message)
+        self.assertIn("todo_placeholder", message)
+        self.assertIn("Relevant coursework or projects: TODO", message)
+        self.assertNotIn("contains sentence-level scaffold/template issues", message)
+
+    def test_cover_letter_brief_validation_writes_error_report_when_app_dir_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app_dir = Path(tmp_dir)
+            brief = {
+                "role_title": "Application Services Software Engineer",
+                "company": "Forterra",
+                "candidate_name": "Vincent Morrill",
+                "matched_skills": ["C#", ".NET"],
+                "safe_resume_keywords": ["SQL"],
+                "evidence_cards": [
+                    {
+                        "theme": "Profile evidence",
+                        "text": "Relevant coursework or projects: TODO",
+                        "source_file": "project_inventory.md",
+                        "claim_boundary": "Do not overclaim ownership.",
+                    }
+                ],
+            }
+
+            with self.assertRaises(ProcessingError):
+                validate_cover_letter_brief(brief, app_dir=app_dir)
+
+            report_path = app_dir / "cover-letter.brief-error.json"
+            self.assertTrue(report_path.is_file())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report.get("field_path"), "evidence_cards[0].text")
+            self.assertEqual(report.get("rule"), "todo_placeholder")
+            self.assertEqual(report.get("source_file"), "project_inventory.md")
+            self.assertEqual(report.get("evidence_card_index"), 0)
+            self.assertIn("Relevant coursework or projects: TODO", report.get("offending_sentence") or "")
 
     def test_cover_letter_brief_validation_accepts_clean_cards(self) -> None:
         brief = {
@@ -378,8 +443,11 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             "Best regards,\n\n"
             "Vincent Morrill"
         )
-        with self.assertRaises(ProcessingError):
+        with self.assertRaises(ProcessingError) as context:
             validate_generated_cover_letter(bad_letter)
+        message = str(context.exception)
+        self.assertIn("Sentence rule", message)
+        self.assertIn("Relevant coursework or projects: TODO", message)
 
     def test_build_cover_letter_repair_prompt_mentions_validation_error(self) -> None:
         prompt = build_cover_letter_repair_prompt(
