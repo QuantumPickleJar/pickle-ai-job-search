@@ -16,6 +16,11 @@ from ai_job_search.model_provider import ModelProviderError
 from ai_job_search.providers import OllamaProvider
 
 from app.config import Settings
+from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
+from app.services.evidence_tools import build_evidence_queries
+from app.services.evidence_tools import list_profile_evidence_sources
+from app.services.evidence_tools import plan_cover_letter_evidence_queries
+from app.services.evidence_tools import search_profile_evidence
 from app.services.job_store import is_safe_identifier
 
 
@@ -33,6 +38,8 @@ class CoverLetterGenerationResult:
     review_passes_enabled: bool
     model_query_count_expected: int
     model_query_count_actual: int
+    evidence_cards_used: list[dict[str, str]]
+    tool_access: dict[str, Any]
     fallback_reason: str | None = None
     validation_error: str | None = None
 
@@ -176,6 +183,7 @@ def generate_cover_letter(
             profile_context=profile_context,
             documents_context=documents_context,
             identity=identity,
+            settings=settings,
             provider=provider,
             review_passes=settings.cover_letter_review_passes,
             query_callback=query_callback,
@@ -190,6 +198,8 @@ def generate_cover_letter(
         "review_passes_enabled": result.review_passes_enabled,
         "model_query_count_expected": result.model_query_count_expected,
         "model_query_count_actual": result.model_query_count_actual,
+        "evidence_cards_used": result.evidence_cards_used,
+        "tool_access": result.tool_access,
         "fallback_reason": result.fallback_reason,
         "validation_error": result.validation_error,
     }
@@ -660,6 +670,12 @@ Style constraints:
 - Do not include placeholder markers for candidate identity or template notes.
 - Avoid awkward location phrasing such as "in Remote".
 - Do not use "ideal candidate", "robust solutions", or "seamlessly integrate".
+- Use 1 to 2 evidence cards naturally in the letter.
+- Do not mention source filenames in the letter.
+- Do not invent facts outside the evidence cards.
+- Do not overclaim ownership, senior architecture authority, cloud ownership, certifications, or platform expertise.
+- If a skill is not verified, omit it or use neutral ramping language.
+- Prefer one concrete proof paragraph over broad claims.
 
 Letter Brief JSON:
 {brief_json}
@@ -672,6 +688,7 @@ def build_cover_letter_brief(
     profile_context: str,
     documents_context: str,
     identity: dict[str, str],
+    letter_evidence_cards: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     role_title = str(job.get("title") or "the target role").strip()
     company = str(job.get("company") or "the target company").strip()
@@ -710,11 +727,36 @@ def build_cover_letter_brief(
         "unit-tested feature work",
         "C#/.NET/SQL",
     ]
-    evidence_bullets = build_cover_letter_evidence(profile_context, {
-        "matched_skills": matched_skills,
-        "safe_resume_keywords": safe_keywords,
-        "safe_enterprise_themes": enterprise_themes,
-    })
+    evidence_cards_raw = letter_evidence_cards if isinstance(letter_evidence_cards, list) else []
+    evidence_cards = [
+        {
+            "theme": str(item.get("theme") or "Evidence").strip(),
+            "text": str(item.get("text") or "").strip(),
+            "source_file": str(item.get("source_file") or "unknown").strip(),
+            "claim_boundary": str(item.get("claim_boundary") or "Do not overclaim ownership or unverified platform expertise.").strip(),
+        }
+        for item in evidence_cards_raw
+        if isinstance(item, dict) and str(item.get("text") or "").strip()
+    ][:6]
+
+    if not evidence_cards:
+        fallback_bullets = build_cover_letter_evidence(
+            profile_context,
+            {
+                "matched_skills": matched_skills,
+                "safe_resume_keywords": safe_keywords,
+                "safe_enterprise_themes": enterprise_themes,
+            },
+        )
+        evidence_cards = [
+            {
+                "theme": "Profile evidence",
+                "text": bullet,
+                "source_file": "profile_context",
+                "claim_boundary": "Do not overclaim ownership or unverified platform expertise.",
+            }
+            for bullet in fallback_bullets[:4]
+        ]
 
     return {
         "role_title": role_title,
@@ -727,9 +769,8 @@ def build_cover_letter_brief(
         "reasons_to_apply": reasons_to_apply[:6],
         "suggested_resume_angle": suggested_resume_angle,
         "cover_letter_angle": cover_letter_angle,
-        "verified_profile_context": profile_context,
         "safe_enterprise_themes": enterprise_themes,
-        "evidence_bullets": evidence_bullets,
+        "evidence_cards": evidence_cards,
         "document_inventory_context": documents_context,
     }
 
@@ -842,17 +883,20 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     role_title = str(letter_brief.get("role_title") or "Application Services Software Engineer").strip()
     company = str(letter_brief.get("company") or "the company").strip()
     stack = "C#, .NET Core, and SQL"
-    evidence_bullets = [str(item).strip() for item in letter_brief.get("evidence_bullets", []) if str(item).strip()]
-    evidence_sentence = "contributed to internal and enterprise-grade systems through feature delivery, testing, and workflow improvements"
-    if evidence_bullets:
-        evidence_sentence = evidence_bullets[0]
-        if evidence_sentence.endswith("."):
-            evidence_sentence = evidence_sentence[:-1]
+    evidence_cards = [item for item in letter_brief.get("evidence_cards", []) if isinstance(item, dict)]
+    evidence_texts = [str(item.get("text") or "").strip() for item in evidence_cards if str(item.get("text") or "").strip()]
+    first_evidence = evidence_texts[0] if evidence_texts else "Contributed to internal and enterprise-grade systems through feature delivery, testing, and workflow improvements."
+    second_evidence = evidence_texts[1] if len(evidence_texts) > 1 else ""
+
+    evidence_sentence = first_evidence.rstrip(".")
+    evidence_tail = ""
+    if second_evidence:
+        evidence_tail = " " + second_evidence
 
     letter = (
         "Dear Hiring Manager,\n\n"
         f"I am applying for the {role_title} position at {company}. My background in {stack} and enterprise application development aligns with the role's focus on maintaining and improving business-critical application services. I am comfortable contributing in environments where software quality, reliability, and steady iteration are important to day-to-day operations.\n\n"
-        f"In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. My experience includes {evidence_sentence}, which gives me a practical foundation for supporting software used in real operational workflows. That work required balancing delivery speed with code clarity and maintainability so teams can continue building on the same systems over time.\n\n"
+        f"In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. My experience includes {evidence_sentence}, which gives me a practical foundation for supporting software used in real operational workflows.{evidence_tail} That work required balancing delivery speed with code clarity and maintainability so teams can continue building on the same systems over time.\n\n"
         "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I also bring a practical mindset for debugging issues, clarifying requirements, and implementing changes that are understandable for both developers and business users.\n\n"
         "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team. I am motivated to contribute in a role where dependable software delivery and collaborative improvement are core expectations.\n\n"
         "Best regards,\n\n"
@@ -867,13 +911,11 @@ def generate_cover_letter_with_review(
     profile_context: str,
     documents_context: str,
     identity: dict[str, str],
+    settings: Settings | None,
     provider: ModelProvider,
     review_passes: bool = True,
     query_callback: Any | None = None,
 ) -> CoverLetterGenerationResult:
-    letter_brief = build_cover_letter_brief(job, fit, profile_context, documents_context, identity)
-    fallback_content = sanitize_generated_cover_letter(build_fallback_cover_letter(letter_brief))
-    expected_queries = 3 if review_passes else 1
     actual_queries = 0
 
     def record_query(stage: str) -> None:
@@ -881,6 +923,87 @@ def generate_cover_letter_with_review(
         actual_queries += 1
         if callable(query_callback):
             query_callback(stage)
+
+    evidence_cards: list[dict[str, Any]] = []
+    sources = list(ALLOWED_PROFILE_EVIDENCE_FILES)
+    if settings is not None:
+        try:
+            source_inventory = list_profile_evidence_sources(settings)
+            available_sources = [
+                str(item.get("source_file") or "")
+                for item in source_inventory
+                if isinstance(item, dict) and item.get("exists")
+            ]
+            sources = [src for src in sources if src in set(available_sources)] or list(ALLOWED_PROFILE_EVIDENCE_FILES)
+        except Exception:
+            sources = list(ALLOWED_PROFILE_EVIDENCE_FILES)
+
+        deterministic_queries = build_evidence_queries(job, fit)
+        record_query("evidence-planning-pass")
+        planned_queries = plan_cover_letter_evidence_queries(job, fit, provider)
+        merged_queries: list[str] = []
+        for query in planned_queries + deterministic_queries:
+            normalized = str(query).strip()
+            if normalized and normalized not in merged_queries:
+                merged_queries.append(normalized)
+        merged_queries = merged_queries[:5]
+
+        themes = [
+            "C#/.NET/SQL",
+            "enterprise application development",
+            "internal applications",
+            "insurance and benefits workflows",
+            "unit-tested feature work",
+            "pull-request-based development",
+        ]
+        for query in merged_queries:
+            try:
+                cards = search_profile_evidence(settings, query, themes, max_results=6)
+            except ValueError:
+                continue
+            for card in cards:
+                if card not in evidence_cards:
+                    evidence_cards.append(card)
+            if len(evidence_cards) >= 6:
+                break
+
+    letter_brief = build_cover_letter_brief(
+        job,
+        fit,
+        profile_context,
+        documents_context,
+        identity,
+        letter_evidence_cards=evidence_cards,
+    )
+    fallback_content = sanitize_generated_cover_letter(build_fallback_cover_letter(letter_brief))
+    expected_queries = 4 if review_passes else 2
+    tool_access = {
+        "enabled": settings is not None,
+        "allowed_sources": list(ALLOWED_PROFILE_EVIDENCE_FILES),
+    }
+
+    def cards_used_from_content(content: str, cards: list[dict[str, Any]], limit: int = 2) -> list[dict[str, str]]:
+        lowered = content.casefold()
+        ranked: list[tuple[int, dict[str, Any]]] = []
+        for card in cards:
+            text = str(card.get("text") or "").strip()
+            if not text:
+                continue
+            tokens = [token for token in re.findall(r"[a-zA-Z0-9#.+-]+", text.casefold()) if len(token) > 3]
+            overlap = sum(1 for token in set(tokens[:12]) if token in lowered)
+            if overlap > 0:
+                ranked.append((overlap, card))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        picked = [item[1] for item in ranked[:limit]]
+        if not picked:
+            picked = cards[:limit]
+        return [
+            {
+                "theme": str(item.get("theme") or "Evidence").strip(),
+                "source_file": str(item.get("source_file") or "unknown").strip(),
+            }
+            for item in picked
+        ]
 
     def fallback_result(reason: str, validation_error: str | None = None) -> CoverLetterGenerationResult:
         sanitized_reason = sanitize_cover_letter_reason(reason)
@@ -891,6 +1014,8 @@ def generate_cover_letter_with_review(
             review_passes_enabled=review_passes,
             model_query_count_expected=expected_queries,
             model_query_count_actual=actual_queries,
+            evidence_cards_used=cards_used_from_content(fallback_content, letter_brief.get("evidence_cards", []), limit=2),
+            tool_access=tool_access,
             fallback_reason=sanitized_reason,
             validation_error=validation_error,
         )
@@ -963,6 +1088,8 @@ def generate_cover_letter_with_review(
             review_passes_enabled=review_passes,
             model_query_count_expected=expected_queries,
             model_query_count_actual=actual_queries,
+            evidence_cards_used=cards_used_from_content(content, letter_brief.get("evidence_cards", []), limit=2),
+            tool_access=tool_access,
             fallback_reason=None,
             validation_error=None,
         )
