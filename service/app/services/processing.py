@@ -124,6 +124,65 @@ REPEATED_NOUN_STACK_PHRASES = (
     "development work",
     "this work",
 )
+PARAGRAPH_ONE_WORK_STYLE_TERMS = (
+    "handoff",
+    "testing",
+    "follow-through",
+    "day-to-day operations",
+    "people using the software",
+    "validation",
+    "maintainability",
+)
+PARAGRAPH_TWO_EVIDENCE_TERMS = (
+    "implemented",
+    "unit tests",
+    "workflow",
+    "business rules",
+    "pull-request",
+    "university it",
+    "insurance",
+    "bizlink",
+    "benefits",
+)
+PARAGRAPH_OVERLAP_TERMS = (
+    "testing",
+    "handoff",
+    "workflow",
+    "maintainable",
+    "reliable",
+    "operational",
+    "day-to-day",
+    "validation",
+    "software quality",
+)
+ROLE_SENTENCE_STOPWORDS = {
+    "about",
+    "across",
+    "after",
+    "aligns",
+    "application",
+    "because",
+    "bring",
+    "changes",
+    "company",
+    "could",
+    "experience",
+    "focus",
+    "having",
+    "internal",
+    "position",
+    "recent",
+    "role",
+    "software",
+    "systems",
+    "their",
+    "these",
+    "through",
+    "using",
+    "where",
+    "which",
+    "would",
+}
 ACTION_FRAGMENT_EXAMPLES_INCLUDE_BLOCKS = (
     "examples include contributed",
     "examples include implemented",
@@ -487,6 +546,15 @@ def validate_generated_cover_letter(content: str) -> None:
     for index, paragraph in enumerate(body_paragraphs):
         _validate_cover_letter_paragraph(paragraph, index)
 
+    paragraph_role_issues = lint_cover_letter_paragraph_roles(content)
+    if paragraph_role_issues:
+        issue = paragraph_role_issues[0]
+        paragraph_text = " ".join(issue.sentence.split())[:220]
+        raise ProcessingError(
+            "cover letter generation returned unsafe output. "
+            f"Paragraph role rule {issue.rule} failed: \"{paragraph_text}\""
+        )
+
     word_count = len(re.findall(r"\b\w+\b", content))
     if word_count < 180 or word_count > 500:
         raise ProcessingError("cover letter generation returned unsafe output. Word count outside acceptable range.")
@@ -516,6 +584,93 @@ def _is_overly_generic_sentence(sentence: str) -> bool:
     if _sentence_has_concrete_evidence_anchor(sentence):
         return False
     return any(marker in lowered for marker in OVERLY_GENERIC_SENTENCE_MARKERS)
+
+
+def _paragraph_term_hits(paragraph: str, terms: tuple[str, ...]) -> set[str]:
+    lowered = paragraph.casefold()
+    return {term for term in terms if term in lowered}
+
+
+def _significant_sentence_tokens(sentence: str) -> set[str]:
+    tokens = {
+        token
+        for token in re.findall(r"[a-z0-9#.+-]+", sentence.casefold())
+        if len(token) >= 5 and token not in ROLE_SENTENCE_STOPWORDS
+    }
+    return tokens
+
+
+def _sentences_repeat_evidence(left: str, right: str) -> bool:
+    left_tokens = _significant_sentence_tokens(left)
+    right_tokens = _significant_sentence_tokens(right)
+    overlap = left_tokens & right_tokens
+    evidence_overlap = overlap & {
+        "bizlink",
+        "workflow",
+        "insurance",
+        "benefits",
+        "business",
+        "rules",
+        "university",
+        "applications",
+        "feature",
+        "changes",
+    }
+    return len(overlap) >= 5 and bool(evidence_overlap)
+
+
+def lint_cover_letter_paragraph_roles(text: str) -> list[CoverLetterQualityIssue]:
+    body_paragraphs = _cover_letter_body_paragraphs(text)
+    issues: list[CoverLetterQualityIssue] = []
+
+    def add(rule: str, message: str, paragraph: str) -> None:
+        issues.append(CoverLetterQualityIssue(rule=rule, message=message, sentence=paragraph))
+
+    if len(body_paragraphs) >= 1:
+        paragraph_one_hits = _paragraph_term_hits(body_paragraphs[0], PARAGRAPH_ONE_WORK_STYLE_TERMS)
+        if len(paragraph_one_hits) > 1:
+            add(
+                "paragraph_role_p1_too_much_work_style",
+                "Paragraph 1 should stay focused on role fit instead of detailed work-style claims",
+                body_paragraphs[0],
+            )
+
+    if len(body_paragraphs) >= 2:
+        paragraph_two_hits = _paragraph_term_hits(body_paragraphs[1], PARAGRAPH_TWO_EVIDENCE_TERMS)
+        if not paragraph_two_hits:
+            add(
+                "paragraph_role_p2_missing_evidence",
+                "Paragraph 2 should contain one concrete evidence anchor",
+                body_paragraphs[1],
+            )
+
+    if len(body_paragraphs) >= 3:
+        second_sentences = split_cover_letter_sentences(body_paragraphs[1])
+        third_sentences = split_cover_letter_sentences(body_paragraphs[2])
+        for second_sentence in second_sentences:
+            for third_sentence in third_sentences:
+                if _sentences_repeat_evidence(second_sentence, third_sentence):
+                    add(
+                        "paragraph_role_p3_repeats_p2_evidence",
+                        "Paragraph 3 should not restate the evidence sentence from paragraph 2",
+                        body_paragraphs[2],
+                    )
+                    break
+            if issues and issues[-1].rule == "paragraph_role_p3_repeats_p2_evidence":
+                break
+
+    for index in range(len(body_paragraphs) - 1):
+        overlap = _paragraph_term_hits(body_paragraphs[index], PARAGRAPH_OVERLAP_TERMS) & _paragraph_term_hits(
+            body_paragraphs[index + 1], PARAGRAPH_OVERLAP_TERMS
+        )
+        if len(overlap) >= 3:
+            add(
+                "paragraph_role_adjacent_overlap",
+                "Adjacent paragraphs repeat too many of the same generic concepts",
+                body_paragraphs[index + 1],
+            )
+
+    return issues
 
 
 def _validate_cover_letter_paragraph(paragraph: str, paragraph_index: int) -> None:
@@ -1199,6 +1354,12 @@ Style constraints:
 - Prefer company-specific phrasing like "Forterra's platform environment" instead of "the team's platform environment".
 - Keep the letter to 4 body paragraphs or fewer before the sign-off.
 
+Required paragraph roles:
+- Paragraph 1: Role fit only. Mention the role, company, and 2 to 4 core skills. Do not include detailed work-style claims.
+- Paragraph 2: Evidence only. Use one concrete experience or curated evidence anchor.
+- Paragraph 3: Motivation and working style. Explain interest in the role and how the candidate works.
+- Paragraph 4: Closing only. Keep it short and invite discussion.
+
 Letter Brief JSON:
 {brief_json}
 """
@@ -1496,12 +1657,17 @@ Rubric:
 - avoids saying "ideal candidate"
 - sounds confident but not inflated
 - uses 1 to 2 concrete evidence cards naturally
+- Paragraph 1 focuses on role fit only
+- Paragraph 2 contains the concrete evidence
+- Paragraph 3 focuses on motivation and working style without repeating the evidence sentence
+- Paragraph 4 is a short closing invitation
 - second paragraph contains one concrete evidence anchor or one polished generic evidence sentence
 - does not repeat nearby sentence openings with "This"
 - avoids repeated noun stacking like development work / this work
 - avoids repeated generic descriptors like practical, reliable, operational, stable, maintainability, or business-critical
 - avoids closing filler such as "I am available to share concrete examples..."
 - prefers company-specific phrasing over "the team's platform environment"
+- avoids adjacent paragraph overlap on testing / handoff / workflow / validation / maintainable concepts
 - stays within 4 body paragraphs before the sign-off
 """
 
@@ -1529,6 +1695,11 @@ Requirements:
 - avoid repeated generic descriptors like practical, reliable, operational, stable, maintainability, or business-critical
 - prefer company-specific phrasing over "the team's platform environment"
 - keep the letter to 4 body paragraphs or fewer before the sign-off
+- Paragraph 1: role fit only, with role, company, and 2 to 4 core skills
+- Paragraph 2: concrete evidence only
+- Paragraph 3: motivation and working style only
+- Paragraph 4: short closing invitation
+- avoid repeating generic testing / handoff / workflow / validation concepts across adjacent paragraphs
 
 Letter Brief JSON:
 {brief_json}
@@ -1547,6 +1718,16 @@ def build_cover_letter_repair_prompt(
     validation_error: str,
 ) -> str:
     brief_json = json.dumps(letter_brief, ensure_ascii=False, indent=2)
+    role_repair_guidance = ""
+    lowered_error = validation_error.casefold()
+    if "paragraph role rule" in lowered_error or "paragraph_role_" in lowered_error:
+        role_repair_guidance = (
+            "- Do not add new claims.\n"
+            "- Make paragraph 1 shorter and focused on role fit.\n"
+            "- Move work evidence to paragraph 2.\n"
+            "- Keep paragraph 3 focused on interest and working style.\n"
+            "- Remove repeated concepts instead of paraphrasing them.\n"
+        )
     return f"""Rewrite this cover letter so it is safe and submission-ready.
 
 Rules:
@@ -1570,6 +1751,12 @@ Rules:
 - Prefer company-specific phrasing over "the team's platform environment".
 - Keep the second paragraph anchored by one concrete evidence card or one polished generic evidence sentence.
 - Keep the letter to 4 body paragraphs or fewer before the sign-off.
+- Use this paragraph structure:
+    - Paragraph 1: role fit only
+    - Paragraph 2: evidence only
+    - Paragraph 3: motivation and working style
+    - Paragraph 4: short closing invitation
+{role_repair_guidance}
 
 Letter Brief JSON:
 {brief_json}
@@ -1617,12 +1804,11 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
 
     letter = (
         "Dear Hiring Manager,\n\n"
-        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with {company}'s focus on maintaining and improving business-critical application services. "
-        "I have worked in internal application settings where clear handoff, careful testing, and dependable follow-through matter to the people using the software.\n\n"
+        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with {company}'s focus on application services and internal platforms.\n\n"
         "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. "
         f"{second_paragraph}\n\n"
-        f"What interests me about this role is the mix of software delivery, stakeholder support, and day-to-day problem solving. I would bring clear implementation habits, testing discipline, and a steady approach to maintainable application changes within {company}'s platform environment. That includes tracing issues carefully, communicating tradeoffs clearly, and following changes through validation before they reach production use.\n\n"
-        f"Thank you for your consideration. I would welcome a conversation about how my C#/.NET application experience can support {company}'s team and help keep application changes understandable, testable, and useful for the people who rely on them each day.\n\n"
+        f"What interests me about this role is the mix of software delivery, stakeholder support, and steady improvement of business applications. I work best by clarifying requirements, communicating directly with teammates, and keeping implementation choices understandable within {company}'s platform environment.\n\n"
+        f"Thank you for your consideration. I would welcome a conversation about how my C#/.NET application experience can support {company}'s team.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
     )
