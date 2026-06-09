@@ -1804,11 +1804,12 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
 
     letter = (
         "Dear Hiring Manager,\n\n"
-        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with {company}'s focus on application services and internal platforms.\n\n"
+        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with {company}'s focus on application services and internal platforms. "
+        f"I would bring experience from business application work that combines C#/.NET development, SQL-backed functionality, and day-to-day support for shared internal systems.\n\n"
         "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. "
         f"{second_paragraph}\n\n"
-        f"What interests me about this role is the mix of software delivery, stakeholder support, and steady improvement of business applications. I work best by clarifying requirements, communicating directly with teammates, and keeping implementation choices understandable within {company}'s platform environment.\n\n"
-        f"Thank you for your consideration. I would welcome a conversation about how my C#/.NET application experience can support {company}'s team.\n\n"
+        f"What interests me about this role is the mix of software delivery, stakeholder support, and steady improvement of business applications. I work best by clarifying requirements, communicating directly with teammates, and keeping implementation choices understandable within {company}'s platform environment. I also value direct collaboration with the people involved in the work so priorities, tradeoffs, and delivery expectations stay clear throughout a project.\n\n"
+        f"Thank you for your consideration. I would welcome a conversation about how my C#/.NET application experience can support {company}'s team. I would also value the opportunity to discuss how I could contribute to the role's mix of application development, support, and steady product improvement.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
     )
