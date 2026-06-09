@@ -66,7 +66,14 @@ COVER_LETTER_BLOCKED_PHRASES = [
     "lacks the minimum",
     "limited exposure",
     "where supported by actual projects",
+    "add verified",
+    "project template",
+    "known technical areas",
+    "candidate project leads",
+    "manual review notes",
+    "missing details to fill manually",
     "safe themes to verify",
+    "technical skills to verify",
     "verify and expand",
     "unless verified",
     "claims to avoid",
@@ -276,6 +283,19 @@ def validate_generated_cover_letter(content: str) -> None:
         raise ProcessingError(
             "cover letter generation returned unsafe output. Grammar quality issue detected. Fragment found: and sql and enterprise application development"
         )
+    examples_include_blocks = (
+        "examples include add",
+        "examples include project",
+        "examples include context:",
+        "examples include purpose:",
+        "examples include role:",
+    )
+    for fragment in examples_include_blocks:
+        if fragment in lowered:
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. Scaffold evidence phrase detected. "
+                f"Fragment found: {fragment}"
+            )
     word_count = len(re.findall(r"\b\w+\b", content))
     if word_count < 180 or word_count > 500:
         raise ProcessingError("cover letter generation returned unsafe output. Word count outside acceptable range.")
@@ -288,15 +308,30 @@ def polish_evidence_for_cover_letter(evidence_text: str) -> str:
 
     lowered = raw.casefold()
     blocked = (
+        "add verified academic, internship, professional, and personal projects here",
+        "add verified",
         "where supported by actual projects",
         "where supported",
         "unless verified",
         "safe claims",
         "claims to avoid",
+        "manual review notes",
+        "project template",
+        "known technical areas",
+        "candidate project leads",
+        "missing details",
+        "technical skills to verify",
     )
     if any(marker in lowered for marker in blocked):
         return ""
     if re.search(r"\bor\b.+where supported by actual projects", lowered):
+        return ""
+    if re.fullmatch(r"[a-z ]{2,35}:", lowered):
+        return ""
+    if any(
+        lowered.startswith(prefix)
+        for prefix in ("context:", "purpose:", "role:", "technologies:", "what was built:", "outcome:", "safe claims:", "claims to avoid:")
+    ):
         return ""
 
     text = raw.rstrip(". ")
@@ -319,6 +354,29 @@ def polish_evidence_for_cover_letter(evidence_text: str) -> str:
             text = re.sub(pattern, replacement, text, count=1)
             break
     return text[:260]
+
+
+def is_safe_cover_letter_evidence_fragment(text: str) -> bool:
+    normalized = " ".join(str(text).split()).strip()
+    if not normalized:
+        return False
+    lowered = normalized.casefold()
+    blocked = (
+        "add verified",
+        "project template",
+        "where supported",
+        "unless verified",
+        "claims to avoid",
+        "safe claims",
+        "manual review notes",
+        "known technical areas",
+        "candidate project leads",
+    )
+    if any(marker in lowered for marker in blocked):
+        return False
+    if re.fullmatch(r"[a-z ]{2,35}:", lowered):
+        return False
+    return True
 
 
 def is_internal_only_requirement(text: str) -> bool:
@@ -944,9 +1002,12 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     company = str(letter_brief.get("company") or "the company").strip()
     stack = "C#, .NET Core, SQL, and enterprise application development"
     evidence_cards = [item for item in letter_brief.get("evidence_cards", []) if isinstance(item, dict)]
+    evidence_cards.sort(
+        key=lambda item: 0 if str(item.get("source_file") or "") == "cover_letter_evidence.md" else 1
+    )
     evidence_texts = [str(item.get("text") or "").strip() for item in evidence_cards if str(item.get("text") or "").strip()]
     polished_evidence = [polish_evidence_for_cover_letter(item) for item in evidence_texts]
-    polished_evidence = [item for item in polished_evidence if item]
+    polished_evidence = [item for item in polished_evidence if is_safe_cover_letter_evidence_fragment(item)]
 
     if polished_evidence:
         evidence_clause = (
@@ -959,12 +1020,12 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
 
     letter = (
         "Dear Hiring Manager,\n\n"
-        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with the role's focus on maintaining and improving business-critical application services. I am comfortable contributing in environments where software quality, reliability, and steady iteration are important to day-to-day operations.\n\n"
+        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with the role's focus on maintaining and improving business-critical application services.\n\n"
         "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. "
         f"{evidence_clause} "
-        "That work required balancing delivery speed with code clarity and maintainability so teams can continue building on the same systems over time.\n\n"
-        "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I also bring a practical mindset for debugging issues, clarifying requirements, and implementing changes that are understandable for both developers and business users.\n\n"
-        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team. I am motivated to contribute in a role where dependable software delivery and collaborative improvement are core expectations.\n\n"
+        "That work has required balancing delivery speed with maintainability so teams can safely extend shared application services over time.\n\n"
+        "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I also value clear communication with technical and business stakeholders when implementing reliable service improvements.\n\n"
+        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
     )

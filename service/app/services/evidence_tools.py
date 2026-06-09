@@ -29,6 +29,10 @@ ALLOWED_PROFILE_EVIDENCE_FILES = (
 BOUNDARY_ONLY_FILES = {"disallowed_claims.md", "generation-constraints.md"}
 
 SCAFFOLD_PHRASE_MARKERS = (
+    "add verified academic",
+    "project template",
+    "known technical areas",
+    "candidate project leads",
     "where supported by actual projects",
     "safe themes to verify",
     "verify and expand",
@@ -46,6 +50,37 @@ SCAFFOLD_PHRASE_MARKERS = (
     "familiarity unless",
     "claim boundaries",
     "manual review notes",
+    "project name",
+    "context:",
+    "purpose:",
+    "role:",
+    "technologies:",
+    "what was built:",
+    "outcome:",
+    "safe claims:",
+    "claims to avoid:",
+    "add only projects",
+)
+
+TEMPLATE_ONLY_HEADINGS = {
+    "project template",
+    "known technical areas to map to projects",
+    "candidate project leads to verify",
+    "manual review notes",
+    "missing details to fill manually",
+    "technical skills to verify",
+}
+
+TEMPLATE_LABEL_PREFIXES = (
+    "context:",
+    "purpose:",
+    "role:",
+    "technologies:",
+    "what was built:",
+    "outcome:",
+    "safe claims:",
+    "claims to avoid:",
+    "project name",
 )
 
 ACCOMPLISHMENT_MARKERS = (
@@ -145,12 +180,20 @@ def list_profile_evidence_sources(settings: Settings) -> list[dict[str, Any]]:
 
 
 def _split_snippets(text: str) -> list[str]:
+    def normalize_heading(value: str) -> str:
+        return " ".join(value.casefold().split())
+
     candidates: list[str] = []
+    in_template_only_section = False
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
             continue
         if line.startswith("#"):
+            heading_text = line.lstrip("#").strip()
+            in_template_only_section = normalize_heading(heading_text) in TEMPLATE_ONLY_HEADINGS
+            continue
+        if in_template_only_section:
             continue
         if line.startswith("- "):
             line = line[2:].strip()
@@ -172,10 +215,41 @@ def _clip_text(text: str, limit: int = 300) -> str:
 
 
 def is_applicant_facing_evidence(text: str) -> bool:
+    raw = " ".join(text.split()).strip()
+    if not raw:
+        return False
+
+    lowered = raw.casefold()
+    label_only = re.fullmatch(r"[a-z ]{2,35}:", lowered)
+    if label_only is not None:
+        return False
+    if lowered.startswith("add verified"):
+        return False
+    if any(lowered.startswith(prefix) for prefix in TEMPLATE_LABEL_PREFIXES):
+        return False
+
     lowered = " ".join(text.casefold().split())
     if not lowered:
         return False
-    return not any(marker in lowered for marker in SCAFFOLD_PHRASE_MARKERS)
+    if any(marker in lowered for marker in SCAFFOLD_PHRASE_MARKERS):
+        return False
+
+    accomplishment_present = any(marker in lowered for marker in ACCOMPLISHMENT_MARKERS)
+    instructionish = any(
+        marker in lowered
+        for marker in (
+            "add only",
+            "to verify",
+            "missing details",
+            "manual review",
+            "candidate project leads",
+            "safe themes",
+            "project template",
+        )
+    )
+    if instructionish and not accomplishment_present:
+        return False
+    return True
 
 
 def _looks_like_skill_list_only(snippet: str) -> bool:
