@@ -15,15 +15,20 @@ from app.config import Settings
 import app.config as config_module
 from app.services.evidence_tools import APPLICANT_FACING_EVIDENCE_FILES
 from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
+from app.services.evidence_tools import is_subjectless_action_fragment
+from app.services.evidence_tools import lint_cover_letter_sentence
 from app.services.processing import (
     ProcessingError,
     build_cover_letter_brief,
     build_fallback_cover_letter,
     build_cover_letter_prompt,
     build_cover_letter_repair_prompt,
+    evidence_fragment_to_clause,
+    evidence_fragment_to_sentence,
     generate_cover_letter,
     generate_cover_letter_with_review,
     is_internal_only_requirement,
+    polish_evidence_clause,
     sanitize_cover_letter_reason,
     build_profile_context,
     polish_evidence_for_cover_letter,
@@ -153,7 +158,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         evidence_cards = brief.get("evidence_cards") or []
         evidence = [str(card.get("text") or "") for card in evidence_cards if isinstance(card, dict)]
         self.assertEqual(len(evidence), 1)
-        self.assertIn("Contributed feature work, testing-focused improvements", evidence[0])
+        self.assertIn("My recent development work has included feature contributions", evidence[0])
 
     def test_cover_letter_brief_uses_only_curated_evidence_cards(self) -> None:
         brief = build_cover_letter_brief(
@@ -417,6 +422,39 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         )
         self.assertEqual(result, "")
 
+    def test_linter_rejects_subjectless_action_fragment(self) -> None:
+        issues = lint_cover_letter_sentence(
+            "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts."
+        )
+        self.assertTrue(any(issue.rule == "subjectless_action_fragment" for issue in issues))
+
+    def test_linter_accepts_subjectful_generic_evidence_sentence(self) -> None:
+        issues = lint_cover_letter_sentence(
+            "My recent development work has included feature contributions, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts."
+        )
+        self.assertEqual(issues, [])
+
+    def test_subjectless_action_fragment_helper_matches_expected_cases(self) -> None:
+        self.assertTrue(is_subjectless_action_fragment("Contributed feature work for internal systems."))
+        self.assertFalse(
+            is_subjectless_action_fragment(
+                "My recent development work has included feature contributions for internal systems."
+            )
+        )
+
+    def test_evidence_clause_polishing_never_returns_raw_capitalized_bullet_fragment(self) -> None:
+        clause = polish_evidence_clause(
+            "Contributed feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow."
+        )
+        self.assertTrue(clause.startswith("contributing "))
+        self.assertFalse(clause.startswith("Contributed "))
+
+    def test_evidence_fragment_helpers_return_clause_or_sentence(self) -> None:
+        clause = evidence_fragment_to_clause("Contributing feature work in BizLink.")
+        sentence = evidence_fragment_to_sentence("contributing feature work in BizLink")
+        self.assertTrue(clause.startswith("contributing "))
+        self.assertEqual(sentence, "That work has included contributing feature work in BizLink.")
+
     def test_polish_evidence_rejects_add_verified_scaffold(self) -> None:
         result = polish_evidence_for_cover_letter(
             "Add verified academic, internship, professional, and personal projects here"
@@ -435,7 +473,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             ],
         }
         fallback = build_fallback_cover_letter(brief)
-        self.assertIn("One example is contributing feature work", fallback)
+        self.assertIn("One example is my work on contributing feature work", fallback)
         self.assertNotIn("SQL or relational database work where supported by actual projects.", fallback)
         self.assertNotIn("and SQL and", fallback)
         self.assertNotIn("Add verified", fallback)
@@ -456,7 +494,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         fallback = build_fallback_cover_letter(brief)
         self.assertNotIn("Only use verified facts", fallback)
         self.assertNotIn("Examples include Only use", fallback)
-        self.assertIn("Contributed feature work, testing-focused improvements", fallback)
+        self.assertIn("That work has included feature contributions, testing-focused improvements", fallback)
 
     def test_fallback_uses_generic_safe_evidence_when_curated_file_missing(self) -> None:
         brief = {
@@ -471,7 +509,27 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         }
         fallback = build_fallback_cover_letter(brief)
         self.assertNotIn("One example is", fallback)
-        self.assertIn("Contributed feature work, testing-focused improvements", fallback)
+        self.assertIn("In recent development work, I have contributed", fallback)
+        self.assertIn("That work has included feature contributions, testing-focused improvements", fallback)
+
+    def test_fallback_cover_letter_does_not_contain_sentence_starting_with_contributed(self) -> None:
+        brief = {
+            "role_title": "Application Services Software Engineer",
+            "company": "Forterra",
+            "evidence_cards": [],
+        }
+        fallback = build_fallback_cover_letter(brief)
+        self.assertNotIn("\n\nContributed ", fallback)
+        self.assertNotIn(". Contributed ", fallback)
+
+    def test_fallback_cover_letter_does_not_contain_examples_include_contributed(self) -> None:
+        brief = {
+            "role_title": "Application Services Software Engineer",
+            "company": "Forterra",
+            "evidence_cards": [],
+        }
+        fallback = build_fallback_cover_letter(brief)
+        self.assertNotIn("Examples include Contributed", fallback)
 
     def test_validator_rejects_nearby_this_sentence_openings(self) -> None:
         bad_letter = (
@@ -534,7 +592,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         bad_letter = (
             "Dear Hiring Manager,\n\n"
             "I am applying for the Application Services Software Engineer position at Forterra because my C# and .NET background fits the role.\n\n"
-            "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts. "
+            "My recent development work has included feature contributions, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts. "
             "That sentence gives me a practical foundation for supporting software used in real operational workflows.\n\n"
             "I would bring clear implementation habits, testing discipline, and steady collaboration to Forterra's platform environment.\n\n"
             "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team.\n\n"
@@ -544,6 +602,20 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         with self.assertRaises(ProcessingError) as context:
             validate_generated_cover_letter(bad_letter)
         self.assertIn("Second paragraph stacks a generic evidence sentence", str(context.exception))
+
+    def test_validator_rejects_latest_bad_cover_letter_fragment_exactly(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra.\n\n"
+            "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts, including changes that had to be checked carefully, understood by teammates, and rolled out without disrupting day-to-day use.\n\n"
+            "I would bring clear implementation habits, testing discipline, and steady collaboration to Forterra's platform environment.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("subjectless_action_fragment", str(context.exception))
 
     def test_validator_rejects_more_than_four_body_paragraphs(self) -> None:
         bad_letter = (
