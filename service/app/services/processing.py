@@ -1132,9 +1132,9 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
         "Dear Hiring Manager,\n\n"
         f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with the role's focus on maintaining and improving business-critical application services.\n\n"
         "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. "
-        f"{evidence_clause}\n\n"
-        "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed.\n\n"
-        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team.\n\n"
+        f"{evidence_clause} This work required translating business rules into reliable behavior, validating changes with tests, and delivering improvements that can be maintained by teams over time.\n\n"
+        "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I focus on practical delivery, clear implementation details, and stable software behavior in day-to-day operations.\n\n"
+        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team. I am available to share concrete examples of feature delivery, testing-focused improvements, and workflow refinements that align with this role.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
     )
