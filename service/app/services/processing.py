@@ -22,6 +22,7 @@ from app.services.evidence_tools import CoverLetterQualityIssue
 from app.services.evidence_tools import REFERENCE_CONTEXT_FILES
 from app.services.evidence_tools import build_evidence_queries
 from app.services.evidence_tools import is_dirty_cover_letter_text
+from app.services.evidence_tools import is_subjectless_action_fragment
 from app.services.evidence_tools import list_existing_profile_evidence_sources
 from app.services.evidence_tools import list_profile_evidence_sources
 from app.services.evidence_tools import lint_cover_letter_text
@@ -62,7 +63,7 @@ class CoverLetterGenerationResult:
 DEFAULT_CANDIDATE_NAME = "Vincent Morrill"
 DEFAULT_CANDIDATE_EMAIL = "vince.codefactory@outlook.com"
 GENERIC_SAFE_EVIDENCE_SENTENCE = (
-    "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts."
+    "My recent development work has included feature contributions, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts."
 )
 STYLE_LIMITED_PHRASES = (
     "practical",
@@ -99,7 +100,7 @@ CONCRETE_EVIDENCE_ANCHORS = (
     "typescript",
 )
 POLISHED_GENERIC_EVIDENCE_MARKERS = (
-    "contributed feature work",
+    "feature contributions",
     "testing-focused improvements",
     "workflow refinements",
     "internal and enterprise-grade application contexts",
@@ -122,6 +123,14 @@ REPEATED_NOUN_STACK_PHRASES = (
     "hands-on development work",
     "development work",
     "this work",
+)
+ACTION_FRAGMENT_EXAMPLES_INCLUDE_BLOCKS = (
+    "examples include contributed",
+    "examples include implemented",
+    "examples include worked",
+    "examples include added",
+    "examples include modified",
+    "examples include improved",
 )
 
 COVER_LETTER_BLOCKED_PHRASES = [
@@ -402,6 +411,12 @@ def validate_generated_cover_letter(content: str) -> None:
         )
     examples_include_blocks = (
         "examples include add",
+        "examples include contributed",
+        "examples include implemented",
+        "examples include worked",
+        "examples include added",
+        "examples include modified",
+        "examples include improved",
         "examples include project",
         "examples include context:",
         "examples include purpose:",
@@ -509,6 +524,23 @@ def _validate_cover_letter_paragraph(paragraph: str, paragraph_index: int) -> No
     if not sentences:
         return
 
+    if is_subjectless_action_fragment(sentences[0]):
+        raise ProcessingError(
+            "cover letter generation returned unsafe output. Paragraph begins with a subjectless action-verb fragment."
+        )
+
+    for sentence in sentences:
+        if is_subjectless_action_fragment(sentence):
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. Sentence begins with a subjectless action-verb fragment."
+            )
+
+    for fragment in ACTION_FRAGMENT_EXAMPLES_INCLUDE_BLOCKS:
+        if fragment in lowered:
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. Examples-include phrase embeds a bullet fragment instead of prose."
+            )
+
     this_starts = [index for index, sentence in enumerate(sentences) if re.match(r"(?i)^this\b", sentence)]
     for left, right in zip(this_starts, this_starts[1:]):
         if right - left <= 2:
@@ -603,14 +635,36 @@ def _write_cover_letter_brief_error(
         logger.debug("Unable to write cover-letter.brief-error.json", exc_info=True)
 
 
-def polish_evidence_for_cover_letter(evidence_text: str) -> str:
+def evidence_fragment_to_clause(text: str) -> str:
+    normalized = " ".join(str(text).split()).strip().rstrip(". ")
+    if not normalized:
+        return ""
+    if normalized[:1].isupper():
+        normalized = normalized[:1].lower() + normalized[1:]
+    return normalized
+
+
+def evidence_fragment_to_sentence(text: str) -> str:
+    normalized = " ".join(str(text).split()).strip().rstrip(". ")
+    if not normalized:
+        return ""
+    if is_subjectless_action_fragment(normalized) or normalized[:1].islower():
+        clause = evidence_fragment_to_clause(normalized)
+        return f"That work has included {clause}."
+    sentence = normalized[:1].upper() + normalized[1:]
+    if not sentence.endswith("."):
+        sentence += "."
+    return sentence
+
+
+def polish_evidence_clause(evidence_text: str) -> str:
     raw = " ".join(str(evidence_text).split()).strip()
     if not raw:
         return ""
 
     if is_dirty_cover_letter_text(raw):
         return ""
-    if lint_cover_letter_text(raw):
+    if any(issue.rule != "subjectless_action_fragment" for issue in lint_cover_letter_text(raw)):
         return ""
 
     lowered = raw.casefold()
@@ -683,10 +737,14 @@ def polish_evidence_for_cover_letter(evidence_text: str) -> str:
         if re.search(pattern, text):
             text = re.sub(pattern, replacement, text, count=1)
             break
-    return text[:260]
+    return evidence_fragment_to_clause(text[:260])
 
 
-def is_safe_cover_letter_evidence_fragment(text: str) -> bool:
+def polish_evidence_for_cover_letter(evidence_text: str) -> str:
+    return polish_evidence_clause(evidence_text)
+
+
+def is_safe_cover_letter_evidence_fragment(text: str, *, require_full_sentence: bool = False) -> bool:
     normalized = " ".join(str(text).split()).strip()
     if not normalized:
         return False
@@ -713,6 +771,8 @@ def is_safe_cover_letter_evidence_fragment(text: str) -> bool:
     if any(marker in lowered for marker in blocked):
         return False
     if re.fullmatch(r"[a-z ]{2,35}:", lowered):
+        return False
+    if require_full_sentence and is_subjectless_action_fragment(normalized):
         return False
     return True
 
@@ -1317,6 +1377,8 @@ def validate_cover_letter_brief(
                 evidence_card_index=evidence_card_index,
             )
         issues = lint_cover_letter_text(text)
+        if field_path.endswith(".text") and field_path.startswith("evidence_cards["):
+            issues = [issue for issue in issues if issue.rule != "subjectless_action_fragment"]
         if issues:
             fail_issue(
                 issues[0],
@@ -1394,7 +1456,11 @@ def validate_cover_letter_brief(
         card
         for card in cards
         if not is_dirty_cover_letter_text(str(card.get("text") or ""))
-        and not lint_cover_letter_text(str(card.get("text") or ""))
+        and not [
+            issue
+            for issue in lint_cover_letter_text(str(card.get("text") or ""))
+            if issue.rule != "subjectless_action_fragment"
+        ]
     ]
     if not clean_cards and not allow_generic_evidence:
         fail(f"{prefix}: no clean evidence cards", field_path="evidence_cards", rule="no_clean_evidence_cards")
@@ -1531,7 +1597,7 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
         and str(item.get("source_file") or "") == "cover_letter_evidence.md"
         and not is_dirty_cover_letter_text(str(item.get("text") or ""))
     ]
-    polished_evidence = [polish_evidence_for_cover_letter(item) for item in evidence_texts]
+    polished_evidence = [polish_evidence_clause(item) for item in evidence_texts]
     polished_evidence = [
         item
         for item in polished_evidence
@@ -1540,20 +1606,20 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
 
     if polished_evidence:
         second_paragraph = (
-            "One example is "
-            f"{polished_evidence[0]}. "
-            "That experience involved translating business rules into dependable application behavior, validating changes with tests, and refining workflow behavior for internal users who depended on the software in day-to-day work."
+            "One example is my work on "
+            f"{polished_evidence[0]}, which gave me practice translating business rules into dependable application behavior. "
+            "That experience also required validation through tests, clear handoff to teammates, and maintainable changes that fit day-to-day use."
         )
     else:
-        second_paragraph = (
-            "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts, "
-            "including changes that had to be checked carefully, understood by teammates, and rolled out without disrupting day-to-day use."
+        second_paragraph = evidence_fragment_to_sentence(
+            "feature contributions, testing-focused improvements, and workflow refinements that required careful validation, clear handoff to teammates, and maintainable changes"
         )
 
     letter = (
         "Dear Hiring Manager,\n\n"
         f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with {company}'s focus on maintaining and improving business-critical application services. "
         "I have worked in internal application settings where clear handoff, careful testing, and dependable follow-through matter to the people using the software.\n\n"
+        "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. "
         f"{second_paragraph}\n\n"
         f"What interests me about this role is the mix of software delivery, stakeholder support, and day-to-day problem solving. I would bring clear implementation habits, testing discipline, and a steady approach to maintainable application changes within {company}'s platform environment. That includes tracing issues carefully, communicating tradeoffs clearly, and following changes through validation before they reach production use.\n\n"
         f"Thank you for your consideration. I would welcome a conversation about how my C#/.NET application experience can support {company}'s team and help keep application changes understandable, testable, and useful for the people who rely on them each day.\n\n"

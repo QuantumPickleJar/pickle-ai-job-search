@@ -180,6 +180,43 @@ LINT_TECH_SKILL_TOKENS = (
     "iam",
 )
 
+ACTION_FRAGMENT_VERBS = (
+    "contributed",
+    "implemented",
+    "added",
+    "modified",
+    "improved",
+    "worked",
+    "wrote",
+    "built",
+    "supported",
+    "applied",
+    "tested",
+    "delivered",
+    "created",
+)
+
+ACTION_FRAGMENT_ALLOWED_SUBJECT_PHRASES = (
+    "i contributed",
+    "i implemented",
+    "i added",
+    "i modified",
+    "i improved",
+    "i worked",
+    "i wrote",
+    "i built",
+    "i supported",
+    "i applied",
+    "i tested",
+    "i delivered",
+    "i created",
+    "my experience includes",
+    "my recent development work has included",
+    "this work has included",
+    "that work has included",
+    "recent work has included",
+)
+
 
 @dataclass(frozen=True)
 class CoverLetterQualityIssue:
@@ -305,6 +342,18 @@ def split_cover_letter_sentences(text: str) -> list[str]:
     return sentences or [normalized]
 
 
+def is_subjectless_action_fragment(sentence: str) -> bool:
+    normalized = " ".join(str(sentence).split()).strip()
+    if not normalized:
+        return False
+
+    normalized = re.sub(r"^[\-•*\s]+", "", normalized).strip()
+    lowered = normalized.casefold()
+    if any(lowered.startswith(prefix) for prefix in ACTION_FRAGMENT_ALLOWED_SUBJECT_PHRASES):
+        return False
+    return any(lowered.startswith(f"{verb} ") for verb in ACTION_FRAGMENT_VERBS)
+
+
 def lint_cover_letter_sentence(sentence: str) -> list[CoverLetterQualityIssue]:
     text = " ".join(str(sentence).split()).strip()
     if not text:
@@ -367,6 +416,9 @@ def lint_cover_letter_sentence(sentence: str) -> list[CoverLetterQualityIssue]:
     if re.search(r"\b(tags?|keywords?):\s*[a-z0-9#.,+\-/ ]{3,}", lowered):
         add("metadata_label_fragment", "Sentence includes metadata/label text instead of applicant-facing prose")
 
+    if is_subjectless_action_fragment(text):
+        add("subjectless_action_fragment", "Sentence starts with an action verb but lacks an explicit subject")
+
     if ". sql or" in lowered or "and sql and" in lowered:
         add("grammar_fragment", "Sentence contains a broken grammar fragment")
 
@@ -396,6 +448,14 @@ def lint_cover_letter_text(text: str) -> list[CoverLetterQualityIssue]:
     return issues
 
 
+def _meaningful_cover_letter_issues(text: str) -> list[CoverLetterQualityIssue]:
+    return [
+        issue
+        for issue in lint_cover_letter_text(text)
+        if issue.rule != "subjectless_action_fragment"
+    ]
+
+
 def is_dirty_cover_letter_text(text: str) -> bool:
     normalized = " ".join(str(text).split()).strip()
     if not normalized:
@@ -404,7 +464,7 @@ def is_dirty_cover_letter_text(text: str) -> bool:
     lowered = normalized.casefold()
     if any(marker in lowered for marker in DIRTY_EVIDENCE_MARKERS):
         return True
-    if lint_cover_letter_text(normalized):
+    if _meaningful_cover_letter_issues(normalized):
         return True
     if re.search(r":\s*todo\b", lowered):
         return True
@@ -433,7 +493,7 @@ def is_applicant_facing_evidence(text: str) -> bool:
         return False
     if any(marker in lowered for marker in SCAFFOLD_PHRASE_MARKERS):
         return False
-    if lint_cover_letter_text(raw):
+    if _meaningful_cover_letter_issues(raw):
         return False
 
     accomplishment_present = any(marker in lowered for marker in ACCOMPLISHMENT_MARKERS)
