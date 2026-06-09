@@ -28,6 +28,60 @@ ALLOWED_PROFILE_EVIDENCE_FILES = (
 
 BOUNDARY_ONLY_FILES = {"disallowed_claims.md", "generation-constraints.md"}
 
+SCAFFOLD_PHRASE_MARKERS = (
+    "where supported by actual projects",
+    "safe themes to verify",
+    "verify and expand",
+    "to verify",
+    "missing details",
+    "claims to avoid",
+    "do not claim",
+    "unless verified",
+    "exact role titles",
+    "exact dates",
+    "project names and outcomes",
+    "technologies used in each role",
+    "any quantified achievements",
+    "supported by actual use",
+    "familiarity unless",
+    "claim boundaries",
+    "manual review notes",
+)
+
+ACCOMPLISHMENT_MARKERS = (
+    "contributed",
+    "implemented",
+    "wrote",
+    "added",
+    "modified",
+    "improved",
+    "tested",
+    "unit test",
+    "pull request",
+    "debugging",
+    "documentation",
+    "workflow",
+    "business rules",
+    "api",
+    "sql",
+    ".net",
+    "c#",
+)
+
+SKILL_LIST_TOKENS = (
+    "c#",
+    ".net",
+    "asp.net",
+    "sql",
+    "api",
+    "angular",
+    "typescript",
+    "javascript",
+    "python",
+    "azure",
+    "cloud",
+)
+
 
 def _profile_dir(settings: Settings) -> Path:
     return settings.app_data_dir / "profile"
@@ -117,6 +171,35 @@ def _clip_text(text: str, limit: int = 300) -> str:
     return clean[: limit - 3].rstrip() + "..."
 
 
+def is_applicant_facing_evidence(text: str) -> bool:
+    lowered = " ".join(text.casefold().split())
+    if not lowered:
+        return False
+    return not any(marker in lowered for marker in SCAFFOLD_PHRASE_MARKERS)
+
+
+def _looks_like_skill_list_only(snippet: str) -> bool:
+    lowered = snippet.casefold()
+    alpha_words = re.findall(r"[a-zA-Z][a-zA-Z+#.\-]+", lowered)
+    comma_count = snippet.count(",")
+    skill_hits = sum(1 for token in SKILL_LIST_TOKENS if token in lowered)
+    has_action = any(marker in lowered for marker in ACCOMPLISHMENT_MARKERS)
+    return bool(skill_hits >= 3 and comma_count >= 2 and len(alpha_words) <= 18 and not has_action)
+
+
+def _quality_bonus(snippet: str, source_file: str) -> int:
+    lowered = snippet.casefold()
+    bonus = 0
+    for marker in ACCOMPLISHMENT_MARKERS:
+        if marker in lowered:
+            bonus += 1
+    if _looks_like_skill_list_only(snippet):
+        bonus -= 3
+    if source_file == "cover_letter_evidence.md":
+        bonus += 5
+    return bonus
+
+
 def _claim_boundary_for_snippet(disallowed_text: str, snippet: str, theme: str) -> str:
     boundary_default = "Do not overclaim ownership, senior architecture authority, cloud ownership, certifications, or unverified platform expertise."
     lowered_snippet = snippet.casefold()
@@ -167,18 +250,14 @@ def search_profile_evidence(
 
     results: list[dict[str, Any]] = []
     for filename, snippet in corpus:
+        if not is_applicant_facing_evidence(snippet):
+            continue
         lowered = snippet.casefold()
         token_hits = sum(1 for token in query_tokens if token in lowered)
         if token_hits == 0:
             continue
 
-        proof_bonus = 0
-        if any(marker in lowered for marker in ("contributed", "implemented", "unit", "workflow", "pull-request", "debug")):
-            proof_bonus += 2
-        if filename == "cover_letter_evidence.md":
-            proof_bonus += 3
-
-        score = token_hits + proof_bonus
+        score = token_hits + _quality_bonus(snippet, filename)
         confidence = "high" if score >= 6 else "medium" if score >= 4 else "low"
         theme = themes[0] if themes else "Evidence"
         for candidate in themes:

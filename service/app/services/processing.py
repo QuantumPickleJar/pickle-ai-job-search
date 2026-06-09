@@ -65,6 +65,15 @@ COVER_LETTER_BLOCKED_PHRASES = [
     "i lack",
     "lacks the minimum",
     "limited exposure",
+    "where supported by actual projects",
+    "safe themes to verify",
+    "verify and expand",
+    "unless verified",
+    "claims to avoid",
+    "do not claim",
+    "sql or relational database work",
+    "c#, .net, asp.net, or .net core work",
+    "and sql and",
 ]
 
 
@@ -74,8 +83,8 @@ Write plain text only.
 Do not include headings or code fences.
 Use only information from the provided Letter Brief.
 Never include internal evaluation language, requirement copy, or self-disqualifying statements.
-Use 1 to 2 concrete evidence bullets from evidence_bullets and weave them naturally into prose.
-Do not list every evidence bullet.
+Use 1 to 2 concrete evidence cards from evidence_cards and weave them naturally into prose.
+Do not list every evidence card.
 Avoid generic filler and avoid repeating broad phrases like enterprise application development without concrete evidence.
 """
 
@@ -90,8 +99,8 @@ COVER_LETTER_FINAL_SYSTEM_PROMPT = """You finalize cover letters for submission 
 Write plain text only.
 Use the Letter Brief, draft, and critique.
 Do not include headings, JSON, or code fences.
-Use 1 to 2 concrete evidence bullets from evidence_bullets and weave them naturally into prose.
-Do not list every evidence bullet.
+Use 1 to 2 concrete evidence cards from evidence_cards and weave them naturally into prose.
+Do not list every evidence card.
 Avoid generic filler and avoid repeating broad phrases like enterprise application development without concrete evidence.
 """
 
@@ -256,9 +265,60 @@ def validate_generated_cover_letter(content: str) -> None:
         raise ProcessingError("cover letter generation returned unsafe output. JSON-like content detected.")
     if any(marker in lowered for marker in ("[address", "street address", "city, state zip")):
         raise ProcessingError("cover letter generation returned unsafe output. Address placeholder detected.")
+    grammar_fragments = ("and sql and", ". sql or", "projects. sql or")
+    for fragment in grammar_fragments:
+        if fragment in lowered:
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. Grammar quality issue detected. "
+                f"Fragment found: {fragment}"
+            )
+    if "and sql and enterprise application development" in lowered:
+        raise ProcessingError(
+            "cover letter generation returned unsafe output. Grammar quality issue detected. Fragment found: and sql and enterprise application development"
+        )
     word_count = len(re.findall(r"\b\w+\b", content))
     if word_count < 180 or word_count > 500:
         raise ProcessingError("cover letter generation returned unsafe output. Word count outside acceptable range.")
+
+
+def polish_evidence_for_cover_letter(evidence_text: str) -> str:
+    raw = " ".join(str(evidence_text).split()).strip()
+    if not raw:
+        return ""
+
+    lowered = raw.casefold()
+    blocked = (
+        "where supported by actual projects",
+        "where supported",
+        "unless verified",
+        "safe claims",
+        "claims to avoid",
+    )
+    if any(marker in lowered for marker in blocked):
+        return ""
+    if re.search(r"\bor\b.+where supported by actual projects", lowered):
+        return ""
+
+    text = raw.rstrip(". ")
+    replacements = (
+        (r"^Contributed\b", "contributing"),
+        (r"^Implemented\b", "implementing"),
+        (r"^Wrote\b", "writing"),
+        (r"^Added\b", "adding"),
+        (r"^Modified\b", "modifying"),
+        (r"^Improved\b", "improving"),
+        (r"^Tested\b", "testing"),
+        (r"^Built and maintained\b", "building and maintaining"),
+        (r"^Built\b", "building"),
+        (r"^Worked on\b", "working on"),
+        (r"^Worked in\b", "working in"),
+        (r"^Applied\b", "applying"),
+    )
+    for pattern, replacement in replacements:
+        if re.search(pattern, text):
+            text = re.sub(pattern, replacement, text, count=1)
+            break
+    return text[:260]
 
 
 def is_internal_only_requirement(text: str) -> bool:
@@ -865,7 +925,7 @@ Requirements:
   Vincent Morrill
 - 3 to 4 concise paragraphs before the sign-off
 - no headings, no bullets, no code fences
-- use 1 to 2 concrete evidence bullets from evidence_bullets
+- use 1 to 2 concrete evidence cards from evidence_cards
 - avoid generic filler and avoid broad claims without concrete evidence
 
 Letter Brief JSON:
@@ -882,21 +942,27 @@ Critique:
 def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     role_title = str(letter_brief.get("role_title") or "Application Services Software Engineer").strip()
     company = str(letter_brief.get("company") or "the company").strip()
-    stack = "C#, .NET Core, and SQL"
+    stack = "C#, .NET Core, SQL, and enterprise application development"
     evidence_cards = [item for item in letter_brief.get("evidence_cards", []) if isinstance(item, dict)]
     evidence_texts = [str(item.get("text") or "").strip() for item in evidence_cards if str(item.get("text") or "").strip()]
-    first_evidence = evidence_texts[0] if evidence_texts else "Contributed to internal and enterprise-grade systems through feature delivery, testing, and workflow improvements."
-    second_evidence = evidence_texts[1] if len(evidence_texts) > 1 else ""
+    polished_evidence = [polish_evidence_for_cover_letter(item) for item in evidence_texts]
+    polished_evidence = [item for item in polished_evidence if item]
 
-    evidence_sentence = first_evidence.rstrip(".")
-    evidence_tail = ""
-    if second_evidence:
-        evidence_tail = " " + second_evidence
+    if polished_evidence:
+        evidence_clause = (
+            f"Examples include {polished_evidence[0]}, giving me a practical foundation for supporting software used in real operational workflows."
+        )
+    else:
+        evidence_clause = (
+            "This hands-on work has given me a practical foundation for supporting software used in real operational workflows."
+        )
 
     letter = (
         "Dear Hiring Manager,\n\n"
-        f"I am applying for the {role_title} position at {company}. My background in {stack} and enterprise application development aligns with the role's focus on maintaining and improving business-critical application services. I am comfortable contributing in environments where software quality, reliability, and steady iteration are important to day-to-day operations.\n\n"
-        f"In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. My experience includes {evidence_sentence}, which gives me a practical foundation for supporting software used in real operational workflows.{evidence_tail} That work required balancing delivery speed with code clarity and maintainability so teams can continue building on the same systems over time.\n\n"
+        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with the role's focus on maintaining and improving business-critical application services. I am comfortable contributing in environments where software quality, reliability, and steady iteration are important to day-to-day operations.\n\n"
+        "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. "
+        f"{evidence_clause} "
+        "That work required balancing delivery speed with code clarity and maintainability so teams can continue building on the same systems over time.\n\n"
         "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I also bring a practical mindset for debugging issues, clarifying requirements, and implementing changes that are understandable for both developers and business users.\n\n"
         "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team. I am motivated to contribute in a role where dependable software delivery and collaborative improvement are core expectations.\n\n"
         "Best regards,\n\n"
