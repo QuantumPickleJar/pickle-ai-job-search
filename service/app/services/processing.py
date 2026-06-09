@@ -123,7 +123,11 @@ def process_job(job_path: Path, settings: Settings) -> Path:
         raise ProcessingError(str(exc)) from exc
 
 
-def generate_cover_letter(application_id: str, settings: Settings) -> Path:
+def generate_cover_letter(
+    application_id: str,
+    settings: Settings,
+    query_callback: Any | None = None,
+) -> Path:
     if not is_safe_identifier(application_id):
         raise ProcessingError(f"invalid application id: {application_id}")
 
@@ -152,6 +156,7 @@ def generate_cover_letter(application_id: str, settings: Settings) -> Path:
             identity=identity,
             provider=provider,
             review_passes=settings.cover_letter_review_passes,
+            query_callback=query_callback,
         )
     except ModelProviderError as exc:
         raise ProcessingError(f"cover letter generation failed: {exc}") from exc
@@ -758,7 +763,7 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
         "Dear Hiring Manager,\n\n"
         f"I am excited to apply for the {role_title} position at {company}. My background in {stack} aligns well with the role's focus on supporting business-critical application services.\n\n"
         "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and collaborating through pull-request-based development. My experience includes application work in university IT, benefits and insurance software, and insurance quoting workflows, giving me a practical foundation for building reliable software that supports real business operations.\n\n"
-        "I am especially interested in this role because it combines software development, stakeholder support, and operational problem-solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed.\n\n"
+        "I am especially interested in this role because it combines software development, stakeholder support, and operational problem-solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I also value transparent communication, measurable outcomes, and collaborative iteration with teammates who own software quality together.\n\n"
         "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
@@ -774,12 +779,15 @@ def generate_cover_letter_with_review(
     identity: dict[str, str],
     provider: ModelProvider,
     review_passes: bool = True,
+    query_callback: Any | None = None,
 ) -> str:
     letter_brief = build_cover_letter_brief(job, fit, profile_context, documents_context, identity)
     fallback = build_fallback_cover_letter(letter_brief)
 
     try:
         if review_passes:
+            if callable(query_callback):
+                query_callback("draft-pass")
             draft_response = provider.complete(
                 ModelRequest(
                     system_prompt=COVER_LETTER_DRAFT_SYSTEM_PROMPT,
@@ -793,6 +801,8 @@ def generate_cover_letter_with_review(
             if not draft:
                 raise ProcessingError("cover letter generation returned empty draft")
 
+            if callable(query_callback):
+                query_callback("critique-pass")
             critique_response = provider.complete(
                 ModelRequest(
                     system_prompt=COVER_LETTER_CRITIQUE_SYSTEM_PROMPT,
@@ -804,6 +814,8 @@ def generate_cover_letter_with_review(
             )
             critique = critique_response.text.strip()
 
+            if callable(query_callback):
+                query_callback("final-rewrite-pass")
             final_response = provider.complete(
                 ModelRequest(
                     system_prompt=COVER_LETTER_FINAL_SYSTEM_PROMPT,
@@ -815,6 +827,8 @@ def generate_cover_letter_with_review(
             )
             content = sanitize_generated_cover_letter(final_response.text)
         else:
+            if callable(query_callback):
+                query_callback("single-pass")
             response = provider.complete(
                 ModelRequest(
                     system_prompt=COVER_LETTER_SINGLE_PASS_SYSTEM_PROMPT,

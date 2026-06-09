@@ -122,8 +122,10 @@ class TaskManager:
         try:
             self.task_store.transition(task_id, "running")
             if task_type == "process-job":
+                self.task_store.set_pipeline_stage(task_id, "fit-analysis")
                 job_path = Path(str(work["job_path"]))
                 app_dir = process_job(job_path, self.settings)
+                self.task_store.set_pipeline_stage(task_id, "persist-results")
                 self.task_store.transition(
                     task_id,
                     "succeeded",
@@ -131,7 +133,9 @@ class TaskManager:
                 )
             elif task_type == "generate-cv":
                 application_id = str(work["application_id"])
+                self.task_store.record_model_query(task_id, "cv-draft")
                 generate_cv(application_id, self.settings)
+                self.task_store.set_pipeline_stage(task_id, "cv-finalized")
                 self.task_store.transition(
                     task_id,
                     "succeeded",
@@ -139,7 +143,13 @@ class TaskManager:
                 )
             elif task_type == "generate-cover-letter":
                 application_id = str(work["application_id"])
-                generate_cover_letter(application_id, self.settings)
+                self.task_store.set_pipeline_stage(task_id, "build-brief")
+                generate_cover_letter(
+                    application_id,
+                    self.settings,
+                    query_callback=lambda stage: self.task_store.record_model_query(task_id, stage),
+                )
+                self.task_store.set_pipeline_stage(task_id, "finalize-letter")
                 self.task_store.transition(
                     task_id,
                     "succeeded",

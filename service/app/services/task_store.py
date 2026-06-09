@@ -48,6 +48,9 @@ class TaskStore:
             "job_id": job_id,
             "task_type": task_type,
             "state": "queued",
+            "pipeline_stage": "queued",
+            "model_query_count": 0,
+            "model_query_events": [],
             "created_at": timestamp,
             "updated_at": timestamp,
             "started_at": None,
@@ -107,11 +110,37 @@ class TaskStore:
             task["updated_at"] = timestamp
             if state == "running":
                 task["started_at"] = timestamp
+                task["pipeline_stage"] = "running"
             if state in TERMINAL_STATES:
                 task["completed_at"] = timestamp
+                task["pipeline_stage"] = state
                 if application_id is not None:
                     task["application_id"] = application_id
                 task["error"] = error
+            self._write(task)
+            return task
+
+    def set_pipeline_stage(self, task_id: str, stage: str) -> dict[str, Any]:
+        with self._lock:
+            task = self.get(task_id)
+            task["pipeline_stage"] = stage.strip() or str(task.get("pipeline_stage") or "running")
+            task["updated_at"] = utc_timestamp()
+            self._write(task)
+            return task
+
+    def record_model_query(self, task_id: str, stage: str) -> dict[str, Any]:
+        with self._lock:
+            task = self.get(task_id)
+            timestamp = utc_timestamp()
+            current_count = int(task.get("model_query_count") or 0)
+            task["model_query_count"] = current_count + 1
+            events = task.get("model_query_events")
+            if not isinstance(events, list):
+                events = []
+            events.append({"at": timestamp, "stage": stage.strip() or "model-query"})
+            task["model_query_events"] = events
+            task["pipeline_stage"] = stage.strip() or str(task.get("pipeline_stage") or "running")
+            task["updated_at"] = timestamp
             self._write(task)
             return task
 
@@ -160,6 +189,9 @@ def validate_task(task: Any) -> None:
     task.setdefault("started_at", None)
     task.setdefault("completed_at", None)
     task.setdefault("error", None)
+    task.setdefault("pipeline_stage", str(task.get("state", "queued")))
+    task.setdefault("model_query_count", 0)
+    task.setdefault("model_query_events", [])
     required = {"task_id", "job_id", "task_type", "state", "created_at", "updated_at"}
     missing = sorted(required - task.keys())
     if missing:
@@ -172,6 +204,12 @@ def validate_task(task: Any) -> None:
         raise InvalidTaskDataError("task type is invalid")
     if task["state"] not in TASK_STATES:
         raise InvalidTaskDataError("task state is invalid")
+    if not isinstance(task.get("pipeline_stage"), str):
+        raise InvalidTaskDataError("pipeline_stage is invalid")
+    if not isinstance(task.get("model_query_count"), int) or int(task["model_query_count"]) < 0:
+        raise InvalidTaskDataError("model_query_count is invalid")
+    if not isinstance(task.get("model_query_events"), list):
+        raise InvalidTaskDataError("model_query_events is invalid")
 
 
 def utc_timestamp() -> str:
