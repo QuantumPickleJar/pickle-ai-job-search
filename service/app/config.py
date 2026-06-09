@@ -17,6 +17,7 @@ DEFAULT_APP_PORT = 3927
 DEFAULT_APP_DATA_DIR = "/app/data"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "qwen2.5:14b"
+DEFAULT_COVER_LETTER_REVIEW_PASSES = "true"
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -74,6 +75,7 @@ class Settings:
     ollama_model: str
     app_api_key: str = field(repr=False)
     enable_remote_mode: bool
+    cover_letter_review_passes: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -94,6 +96,10 @@ class Settings:
             "ENABLE_REMOTE_MODE",
             os.environ.get("ENABLE_REMOTE_MODE", "false"),
         )
+        cover_letter_review_passes = parse_bool(
+            "COVER_LETTER_REVIEW_PASSES",
+            os.environ.get("COVER_LETTER_REVIEW_PASSES", DEFAULT_COVER_LETTER_REVIEW_PASSES),
+        )
 
         if enable_remote_mode and not app_api_key.strip():
             raise ConfigError("APP_API_KEY must be set when ENABLE_REMOTE_MODE is true")
@@ -106,6 +112,7 @@ class Settings:
             ollama_model=ollama_model,
             app_api_key=app_api_key,
             enable_remote_mode=enable_remote_mode,
+            cover_letter_review_passes=cover_letter_review_passes,
         )
 
 

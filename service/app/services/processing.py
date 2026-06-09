@@ -9,6 +9,7 @@ from typing import Any
 
 from ai_job_search.apply_from_file import ApplyFromFileError, apply_from_file
 from ai_job_search.model_provider import ModelRequest
+from ai_job_search.model_provider import ModelProvider
 from ai_job_search.model_provider import ModelProviderError
 from ai_job_search.providers import OllamaProvider
 
@@ -24,8 +25,17 @@ DEFAULT_CANDIDATE_NAME = "Vincent Morrill"
 DEFAULT_CANDIDATE_EMAIL = "vince.codefactory@outlook.com"
 
 COVER_LETTER_BLOCKED_PHRASES = [
+    "[candidate",
+    "[your",
     "[mention",
     "minimum 2-3 years",
+    "in remote",
+    "ideal candidate",
+    "seamlessly integrate",
+    "robust solutions",
+    "as a language model",
+    "based on the provided",
+    "i am actively deepening",
     "actively deepening my experience with",
     "i do not meet",
     "i don't meet",
@@ -35,11 +45,33 @@ COVER_LETTER_BLOCKED_PHRASES = [
 ]
 
 
-COVER_LETTER_SYSTEM_PROMPT = """You write concise, factual, role-targeted cover letters.
+COVER_LETTER_DRAFT_SYSTEM_PROMPT = """You write polished, factual, role-targeted cover letters.
+
+Write plain text only.
+Do not include headings or code fences.
+Use only information from the provided Letter Brief.
+Never include internal evaluation language, requirement copy, or self-disqualifying statements.
+"""
+
+COVER_LETTER_CRITIQUE_SYSTEM_PROMPT = """You are a strict cover letter editor.
+
+Return concise critique bullets only.
+Flag issues against the rubric and suggest concrete edits.
+"""
+
+COVER_LETTER_FINAL_SYSTEM_PROMPT = """You finalize cover letters for submission readiness.
+
+Write plain text only.
+Use the Letter Brief, draft, and critique.
+Do not include headings, JSON, or code fences.
+"""
+
+
+COVER_LETTER_SINGLE_PASS_SYSTEM_PROMPT = """You write concise, factual, role-targeted cover letters.
 
 Return plain Markdown only.
 Do not fabricate skills, achievements, dates, or employers.
-Use only information present in the job payload and fit-analysis context.
+Use only information present in the provided Letter Brief.
 If context is missing, write a neutral placeholder sentence rather than inventing details.
 
 Critical claim constraints:
@@ -101,32 +133,28 @@ def generate_cover_letter(application_id: str, settings: Settings) -> Path:
 
     job = read_json_file(app_dir / "job.json", "job")
     fit = read_json_file(app_dir / "fit-analysis.json", "fit analysis")
-    notes = read_text_file(app_dir / "cover-letter-notes.md", "cover letter notes")
     profile_context = build_profile_context(settings)
     documents_context = build_documents_context(settings)
+    identity = candidate_identity()
 
     provider = OllamaProvider(
         model=settings.ollama_model,
         base_url=settings.ollama_base_url,
         timeout_seconds=300,
     )
-    request = ModelRequest(
-        system_prompt=COVER_LETTER_SYSTEM_PROMPT,
-        user_prompt=build_cover_letter_prompt(job, fit, notes, profile_context, documents_context),
-        temperature=0.3,
-        max_tokens=1400,
-        response_format="text",
-    )
 
     try:
-        response = provider.complete(request)
+        content = generate_cover_letter_with_review(
+            job=job,
+            fit=fit,
+            profile_context=profile_context,
+            documents_context=documents_context,
+            identity=identity,
+            provider=provider,
+            review_passes=settings.cover_letter_review_passes,
+        )
     except ModelProviderError as exc:
         raise ProcessingError(f"cover letter generation failed: {exc}") from exc
-
-    content = sanitize_generated_cover_letter(response.text)
-    if not content:
-        raise ProcessingError("cover letter generation returned empty content")
-    validate_generated_cover_letter(content)
 
     output_path = app_dir / "cover-letter.md"
     output_path.write_text(content + "\n", encoding="utf-8")
@@ -163,6 +191,46 @@ def validate_generated_cover_letter(content: str) -> None:
                 "cover letter generation returned unsafe output. "
                 f"Blocked phrase found: {phrase}"
             )
+    if "##" in content or "```" in content:
+        raise ProcessingError("cover letter generation returned unsafe output. Invalid markdown structure.")
+    if not content.startswith("Dear Hiring Manager,"):
+        raise ProcessingError("cover letter generation returned unsafe output. Missing required greeting.")
+    if "Best regards," not in content:
+        raise ProcessingError("cover letter generation returned unsafe output. Missing required sign-off.")
+    if DEFAULT_CANDIDATE_NAME not in content:
+        raise ProcessingError("cover letter generation returned unsafe output. Missing required candidate signature.")
+    if re.search(r"\[[^\]]+\]", content):
+        raise ProcessingError("cover letter generation returned unsafe output. Placeholder markers detected.")
+    if any(marker in lowered for marker in ("{", "}", "\"role_title\"", "\"company\"")):
+        raise ProcessingError("cover letter generation returned unsafe output. JSON-like content detected.")
+    if any(marker in lowered for marker in ("[address", "street address", "city, state zip")):
+        raise ProcessingError("cover letter generation returned unsafe output. Address placeholder detected.")
+    word_count = len(re.findall(r"\b\w+\b", content))
+    if word_count < 180 or word_count > 500:
+        raise ProcessingError("cover letter generation returned unsafe output. Word count outside acceptable range.")
+
+
+def is_internal_only_requirement(text: str) -> bool:
+    value = text.strip().lower()
+    if not value:
+        return False
+    patterns = (
+        "minimum",
+        "2-3 years",
+        "years of software engineering experience",
+        "required",
+        "must have",
+        "working knowledge",
+        "bachelor",
+        "degree",
+        "certification",
+        "microsoft 365",
+        "azure",
+        "power platform",
+        "enterprise identity",
+        "iam",
+    )
+    return any(pattern in value for pattern in patterns)
 
 
 def read_json_file(path: Path, label: str) -> dict[str, Any]:
@@ -207,14 +275,17 @@ def build_profile_context(settings: Settings) -> str:
 
     if profile_dir.is_dir():
         for filename in (
-            "resume_facts.md",
-            "project_inventory.md",
-            "experience_bullets.md",
-            "skills_inventory.md",
-            "disallowed_claims.md",
-            "education.md",
-            "voice_and_style.md",
             "base_profile.md",
+            "resume_facts.md",
+            "education.md",
+            "skills_inventory.md",
+            "experience_bullets.md",
+            "project_inventory.md",
+            "experience_timeline.md",
+            "job_preferences.md",
+            "voice_and_style.md",
+            "disallowed_claims.md",
+            "generation-constraints.md",
         ):
             content = read_optional_text_file(profile_dir / filename)
             if content:
@@ -526,26 +597,14 @@ def generate_cv(application_id: str, settings: Settings) -> Path:
 
 
 def build_cover_letter_prompt(
-    job: dict[str, Any],
-    fit: dict[str, Any],
-    notes: str,
-    profile_context: str,
-    documents_context: str,
+    letter_brief: dict[str, Any],
 ) -> str:
-    job_json = json.dumps(job, ensure_ascii=False, indent=2)
-    fit_for_letter = dict(fit)
-    internal_missing_skills = [
-        str(item).strip() for item in fit_for_letter.pop("missing_skills", []) if str(item).strip()
-    ]
-    fit_json = json.dumps(fit_for_letter, ensure_ascii=False, indent=2)
-    internal_risk_note = "None."
-    if internal_missing_skills:
-        internal_risk_note = ", ".join(internal_missing_skills)
+    brief_json = json.dumps(letter_brief, ensure_ascii=False, indent=2)
     return f"""Write a complete, job-specific cover letter in Markdown.
 
 Output format:
 - Start with a greeting line: "Dear Hiring Manager,"
-- 3 to 5 short paragraphs
+- 3 to 4 concise paragraphs
 - End with this exact sign-off block:
     Best regards,
     Vincent Morrill
@@ -555,31 +614,226 @@ Style constraints:
 - No tables
 - No markdown code fences
 - No invented claims
-- Do not say the candidate lacks enterprise application experience.
-- If needed, phrase gaps as senior architecture ownership scope, not enterprise exposure.
-- Do not describe the candidate as architecture owner of BizLink, AgencyPortal, PowerWriter, ImageRight, UWO Portal, or Applied benefits platform.
-- Never include self-disqualifying phrases such as "I do not meet", "I don't meet", "I lack", "lacks the minimum", "limited exposure", or "actively deepening my experience with".
+- Do not include self-disqualifying language.
+- Do not include exact requirement-copy language from postings.
 - Do not include placeholder markers for candidate identity or template notes.
-- Missing skills are internal risk context only and must not appear in final prose.
+- Avoid awkward location phrasing such as "in Remote".
+- Do not use "ideal candidate", "robust solutions", or "seamlessly integrate".
 
-Candidate profile context:
-{profile_context}
-
-Supporting document context:
-{documents_context}
-
-Job context JSON:
-{job_json}
-
-Fit analysis JSON:
-{fit_json}
-
-Internal-only missing skill risks (do not include in the final letter):
-{internal_risk_note}
-
-Cover letter notes:
-{notes}
+Letter Brief JSON:
+{brief_json}
 """
+
+
+def build_cover_letter_brief(
+    job: dict[str, Any],
+    fit: dict[str, Any],
+    profile_context: str,
+    documents_context: str,
+    identity: dict[str, str],
+) -> dict[str, Any]:
+    role_title = str(job.get("title") or "the target role").strip()
+    company = str(job.get("company") or "the target company").strip()
+    location_raw = str(job.get("location") or "").strip()
+    location = ""
+    if location_raw and location_raw.lower() != "remote":
+        location = location_raw
+
+    matched_skills = [
+        str(item).strip()
+        for item in fit.get("matched_skills", [])
+        if str(item).strip() and not is_internal_only_requirement(str(item))
+    ]
+    safe_keywords = [
+        str(item).strip()
+        for item in fit.get("resume_keywords_to_include", [])
+        if str(item).strip() and not is_internal_only_requirement(str(item))
+    ]
+    reasons_to_apply = [
+        str(item).strip()
+        for item in fit.get("reasons_to_apply", [])
+        if str(item).strip() and not is_internal_only_requirement(str(item))
+    ]
+    suggested_resume_angle = str(fit.get("suggested_resume_angle") or "").strip()
+    if is_internal_only_requirement(suggested_resume_angle):
+        suggested_resume_angle = ""
+    cover_letter_angle = str(fit.get("cover_letter_angle") or "").strip()
+    if is_internal_only_requirement(cover_letter_angle):
+        cover_letter_angle = ""
+
+    enterprise_themes = [
+        "enterprise application contribution",
+        "internal university IT applications",
+        "benefits/insurance software",
+        "insurance quoting workflows",
+        "unit-tested feature work",
+        "C#/.NET/SQL",
+    ]
+
+    return {
+        "role_title": role_title,
+        "company": company,
+        "location": location,
+        "candidate_name": str(identity.get("name") or DEFAULT_CANDIDATE_NAME).strip(),
+        "candidate_email": str(identity.get("email") or DEFAULT_CANDIDATE_EMAIL).strip(),
+        "matched_skills": matched_skills[:8],
+        "safe_resume_keywords": safe_keywords[:10],
+        "reasons_to_apply": reasons_to_apply[:6],
+        "suggested_resume_angle": suggested_resume_angle,
+        "cover_letter_angle": cover_letter_angle,
+        "verified_profile_context": profile_context,
+        "safe_enterprise_themes": enterprise_themes,
+        "document_inventory_context": documents_context,
+    }
+
+
+def build_cover_letter_critique_prompt(letter_brief: dict[str, Any], draft: str) -> str:
+    brief_json = json.dumps(letter_brief, ensure_ascii=False, indent=2)
+    return f"""Evaluate this draft against the rubric and provide concise revision bullets.
+
+Letter Brief JSON:
+{brief_json}
+
+Draft:
+{draft}
+
+Rubric:
+- no unsupported claims
+- no self-disqualifying gap language
+- no exact "Minimum 2-3 years" requirement language
+- no bracket placeholders
+- signs as Vincent Morrill
+- 3 to 4 concise paragraphs
+- company and role are named naturally
+- includes at least one grounded experience theme:
+  - enterprise application contribution
+  - internal university IT applications
+  - benefits/insurance software
+  - insurance quoting workflows
+  - unit-tested feature work
+  - C#/.NET/SQL
+- avoids awkward location phrasing like "in Remote"
+- avoids generic filler such as "robust solutions that seamlessly integrate"
+- avoids saying "ideal candidate"
+- sounds confident but not inflated
+"""
+
+
+def build_cover_letter_final_prompt(
+    letter_brief: dict[str, Any],
+    draft: str,
+    critique: str,
+) -> str:
+    brief_json = json.dumps(letter_brief, ensure_ascii=False, indent=2)
+    return f"""Rewrite the cover letter as a polished final version.
+
+Requirements:
+- Start with: Dear Hiring Manager,
+- End exactly with:
+  Best regards,
+
+  Vincent Morrill
+- 3 to 4 concise paragraphs before the sign-off
+- no headings, no bullets, no code fences
+
+Letter Brief JSON:
+{brief_json}
+
+Draft:
+{draft}
+
+Critique:
+{critique}
+"""
+
+
+def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
+    role_title = str(letter_brief.get("role_title") or "Application Services Software Engineer").strip()
+    company = str(letter_brief.get("company") or "the company").strip()
+    skills = letter_brief.get("matched_skills") or []
+    safe_skills = [str(skill).strip() for skill in skills if str(skill).strip()][:4]
+    stack = ", ".join(safe_skills) if safe_skills else "C#, .NET Core, SQL, and enterprise application development"
+
+    letter = (
+        "Dear Hiring Manager,\n\n"
+        f"I am excited to apply for the {role_title} position at {company}. My background in {stack} aligns well with the role's focus on supporting business-critical application services.\n\n"
+        "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and collaborating through pull-request-based development. My experience includes application work in university IT, benefits and insurance software, and insurance quoting workflows, giving me a practical foundation for building reliable software that supports real business operations.\n\n"
+        "I am especially interested in this role because it combines software development, stakeholder support, and operational problem-solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed.\n\n"
+        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team.\n\n"
+        "Best regards,\n\n"
+        "Vincent Morrill"
+    )
+    return letter
+
+
+def generate_cover_letter_with_review(
+    job: dict[str, Any],
+    fit: dict[str, Any],
+    profile_context: str,
+    documents_context: str,
+    identity: dict[str, str],
+    provider: ModelProvider,
+    review_passes: bool = True,
+) -> str:
+    letter_brief = build_cover_letter_brief(job, fit, profile_context, documents_context, identity)
+    fallback = build_fallback_cover_letter(letter_brief)
+
+    try:
+        if review_passes:
+            draft_response = provider.complete(
+                ModelRequest(
+                    system_prompt=COVER_LETTER_DRAFT_SYSTEM_PROMPT,
+                    user_prompt=build_cover_letter_prompt(letter_brief),
+                    temperature=0.3,
+                    max_tokens=900,
+                    response_format="text",
+                )
+            )
+            draft = sanitize_generated_cover_letter(draft_response.text)
+            if not draft:
+                raise ProcessingError("cover letter generation returned empty draft")
+
+            critique_response = provider.complete(
+                ModelRequest(
+                    system_prompt=COVER_LETTER_CRITIQUE_SYSTEM_PROMPT,
+                    user_prompt=build_cover_letter_critique_prompt(letter_brief, draft),
+                    temperature=0,
+                    max_tokens=500,
+                    response_format="text",
+                )
+            )
+            critique = critique_response.text.strip()
+
+            final_response = provider.complete(
+                ModelRequest(
+                    system_prompt=COVER_LETTER_FINAL_SYSTEM_PROMPT,
+                    user_prompt=build_cover_letter_final_prompt(letter_brief, draft, critique),
+                    temperature=0.2,
+                    max_tokens=900,
+                    response_format="text",
+                )
+            )
+            content = sanitize_generated_cover_letter(final_response.text)
+        else:
+            response = provider.complete(
+                ModelRequest(
+                    system_prompt=COVER_LETTER_SINGLE_PASS_SYSTEM_PROMPT,
+                    user_prompt=build_cover_letter_prompt(letter_brief),
+                    temperature=0.3,
+                    max_tokens=900,
+                    response_format="text",
+                )
+            )
+            content = sanitize_generated_cover_letter(response.text)
+
+        if not content:
+            raise ProcessingError("cover letter generation returned empty content")
+        validate_generated_cover_letter(content)
+        return content
+    except (ModelProviderError, ProcessingError):
+        sanitized_fallback = sanitize_generated_cover_letter(fallback)
+        validate_generated_cover_letter(sanitized_fallback)
+        return sanitized_fallback
 
 
 def build_cv_prompt(
