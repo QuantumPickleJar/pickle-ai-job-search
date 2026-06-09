@@ -10,6 +10,7 @@ from typing import Any
 
 from app.config import Settings
 from app.services.job_store import InvalidStoredDataError, JobStore, ResourceNotFoundError
+from app.services.task_errors import safe_task_error
 from app.services.processing import ProcessingError, generate_cover_letter, generate_cv, process_job
 from app.services.task_store import TaskStore, TaskStoreError
 
@@ -147,25 +148,55 @@ class TaskManager:
             else:
                 raise TaskStoreError(f"unsupported task type: {task_type}")
         except ProcessingError as exc:
-            logger.error(f"[{task_id}] ProcessingError in {task_type}: {exc}", exc_info=True)
-            if task_type == "process-job":
-                self._mark_failed(task_id, "Job processing failed; verify Ollama and service configuration")
-            elif task_type == "generate-cv":
-                self._mark_failed(task_id, "CV generation failed; verify model output and service configuration")
-            else:
-                self._mark_failed(task_id, "Cover letter generation failed; verify model output and service configuration")
+            sanitized = safe_task_error(exc, task_type)
+            self._log_task_failure(
+                task_id=task_id,
+                task_type=task_type,
+                sanitized_error=sanitized,
+            )
+            self._mark_failed(task_id, sanitized)
         except OSError as exc:
-            logger.error(f"[{task_id}] OSError in {task_type}: {exc}", exc_info=True)
-            if "Permission denied" in str(exc):
-                self._mark_failed(task_id, f"Permission denied accessing data: {exc}")
-            else:
-                self._mark_failed(task_id, f"File system error: {exc}")
+            sanitized = safe_task_error(exc, task_type)
+            self._log_task_failure(
+                task_id=task_id,
+                task_type=task_type,
+                sanitized_error=sanitized,
+            )
+            self._mark_failed(task_id, sanitized)
         except TaskStoreError as exc:
-            logger.error(f"[{task_id}] TaskStoreError: {exc}", exc_info=True)
-            self._mark_failed(task_id, "Task processing failed")
+            sanitized = safe_task_error(exc, task_type)
+            self._log_task_failure(
+                task_id=task_id,
+                task_type=task_type,
+                sanitized_error=sanitized,
+            )
+            self._mark_failed(task_id, sanitized)
         except Exception as exc:
-            logger.error(f"[{task_id}] Unexpected exception in {task_type}: {exc}", exc_info=True)
-            self._mark_failed(task_id, f"Task processing failed: {type(exc).__name__}")
+            sanitized = safe_task_error(exc, task_type)
+            self._log_task_failure(
+                task_id=task_id,
+                task_type=task_type,
+                sanitized_error=sanitized,
+            )
+            self._mark_failed(task_id, sanitized)
+
+    def _log_task_failure(self, *, task_id: str, task_type: str, sanitized_error: str) -> None:
+        job_id = "unknown"
+        application_id = None
+        try:
+            task = self.task_store.get(task_id)
+            job_id = str(task.get("job_id") or "unknown")
+            application_id = task.get("application_id")
+        except TaskStoreError:
+            pass
+        logger.error(
+            "Task failed task_id=%s task_type=%s job_id=%s application_id=%s error=%s",
+            task_id,
+            task_type,
+            job_id,
+            application_id,
+            sanitized_error,
+        )
 
     def _mark_failed(self, task_id: str, message: str) -> None:
         try:

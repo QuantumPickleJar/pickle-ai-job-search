@@ -198,8 +198,10 @@ def application_table(applications: Iterable[dict[str, Any]]) -> str:
 def task_table(tasks: Iterable[dict[str, Any]]) -> str:
     rows = []
     for task in tasks:
+        task_id = escape(str(task.get("task_id", "")), quote=True)
         job_id = escape(str(task.get("job_id", "")), quote=True)
         application_id = task.get("application_id")
+        state = str(task.get("state") or "unknown")
         task_type = str(task.get("task_type") or "process-job")
         task_label = {
             "process-job": "Fit analysis",
@@ -208,21 +210,29 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
         }.get(task_type, task_type.replace("-", " "))
         safe_application_id = escape(str(application_id), quote=True) if application_id else ""
         generated_target = ""
-        if application_id and str(task.get("state")) == "succeeded":
+        if application_id and state == "succeeded":
             if task_type == "generate-cover-letter":
                 generated_target = f"/ui/generated/{safe_application_id}/cover-letter.md"
             elif task_type == "generate-cv":
                 generated_target = f"/ui/generated/{safe_application_id}/cv-draft.md"
 
-        result = (
-            f'<a href="{generated_target}">Open generated file</a>'
-            if generated_target
-            else (
-                f'<a href="/ui/applications/{safe_application_id}">Open workspace</a>'
-                if application_id
-                else escape(str(task.get("error") or "Waiting"))
-            )
-        )
+        result_parts: list[str] = []
+        if state == "failed":
+            task_error = escape(str(task.get("error") or "Task failed"))
+            result_parts.append(f"<strong>{task_error}</strong>")
+            if application_id:
+                result_parts.append(f'<a href="/ui/applications/{safe_application_id}">Open workspace</a>')
+        elif generated_target:
+            result_parts.append(f'<a href="{generated_target}">Open generated file</a>')
+        elif application_id:
+            result_parts.append(f'<a href="/ui/applications/{safe_application_id}">Open workspace</a>')
+        else:
+            result_parts.append(escape(str(task.get("error") or "Waiting")))
+
+        if task_id:
+            result_parts.append(f'<a href="/ui/tasks/{task_id}">Task details</a>')
+
+        result = "<br>".join(result_parts)
         target_href = (
             generated_target
             if generated_target
@@ -240,7 +250,7 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
 <tr>
   <td><a class="primary-link" href="{target_href}">{target_label}</a></td>
     <td>{escape(task_label)}</td>
-  <td>{status_badge(task.get("state"))}</td>
+    <td>{status_badge(state)}</td>
   <td>{result}</td>
   <td class="mono">{escape(short_date(task.get("updated_at")))}</td>
 </tr>

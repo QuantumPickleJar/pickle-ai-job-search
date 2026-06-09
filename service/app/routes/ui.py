@@ -21,7 +21,7 @@ from app.services.job_store import (
 from app.services.ollama_client import OllamaClient, OllamaHealthError
 from app.services.processing import ProcessingError
 from app.services.task_queue import TaskManager
-from app.services.task_store import InvalidTaskDataError, TaskStore
+from app.services.task_store import InvalidTaskDataError, TaskNotFoundError, TaskStore
 from app.ui.views import (
     application_table,
     detail_grid,
@@ -97,6 +97,97 @@ def dashboard(
             body=body,
             settings=settings,
             error=error,
+        )
+    )
+
+
+@router.get("/ui/tasks", response_class=HTMLResponse)
+def tasks_page(settings: Settings = Depends(get_settings)) -> HTMLResponse:
+    try:
+        tasks = TaskStore(settings.app_data_dir).list()
+        error = ""
+    except InvalidTaskDataError as exc:
+        tasks, error = [], str(exc)
+
+    body = section("Processing activity", task_table(tasks))
+    return HTMLResponse(
+        page(
+            title="Tasks",
+            active="dashboard",
+            body=body,
+            settings=settings,
+            error=error,
+        )
+    )
+
+
+@router.get("/ui/tasks/{task_id}", response_class=HTMLResponse)
+def task_detail(task_id: str, settings: Settings = Depends(get_settings)) -> HTMLResponse:
+    store = TaskStore(settings.app_data_dir)
+    try:
+        task = store.get(task_id)
+    except (TaskNotFoundError, InvalidTaskDataError) as exc:
+        return HTMLResponse(
+            page(
+                title="Task not found",
+                active="dashboard",
+                body=empty_state(
+                    "Task unavailable",
+                    str(exc),
+                    '<a class="button" href="/ui/tasks">Back to tasks</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=404,
+        )
+
+    job_id = str(task.get("job_id") or "")
+    application_id = task.get("application_id")
+    safe_application_id = quote(str(application_id), safe="-._~") if application_id else ""
+    task_type = str(task.get("task_type") or "")
+    generated_link = ""
+    if application_id and str(task.get("state")) == "succeeded":
+        if task_type == "generate-cover-letter":
+            generated_link = f'/ui/generated/{safe_application_id}/cover-letter.md'
+        elif task_type == "generate-cv":
+            generated_link = f'/ui/generated/{safe_application_id}/cv-draft.md'
+
+    links: list[str] = []
+    if job_id:
+        links.append(f'<a href="/ui/jobs/{quote(job_id, safe="-._~")}">Open job</a>')
+    if application_id:
+        links.append(f'<a href="/ui/applications/{safe_application_id}">Open workspace</a>')
+    if generated_link:
+        links.append(f'<a href="{generated_link}">Open generated file</a>')
+
+    details = detail_grid(
+        (
+            ("Task ID", task.get("task_id")),
+            ("Task type", task.get("task_type")),
+            ("State", task.get("state")),
+            ("Job ID", task.get("job_id")),
+            ("Application ID", task.get("application_id")),
+            ("Created", task.get("created_at")),
+            ("Updated", task.get("updated_at")),
+            ("Started", task.get("started_at")),
+            ("Completed", task.get("completed_at")),
+        )
+    )
+
+    sanitized_error = escape(str(task.get("error") or "No error recorded"))
+    diagnostics = f'<section class="content-block"><h3>Error</h3><pre>{sanitized_error}</pre></section>'
+    links_html = (
+        f'<section class="content-block"><h3>Links</h3><p>{" | ".join(links)}</p></section>'
+        if links
+        else ""
+    )
+    body = section("Task diagnostics", details + diagnostics + links_html)
+    return HTMLResponse(
+        page(
+            title="Task detail",
+            active="dashboard",
+            body=body,
+            settings=settings,
         )
     )
 
