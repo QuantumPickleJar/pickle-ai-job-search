@@ -106,6 +106,7 @@ PROFILE_CONTEXT_FILES = [
     "voice_and_style.md",
     "disallowed_claims.md",
     "generation-constraints.md",
+    "cover_letter_evidence.md"
 ]
 
 FIT_OUTPUT_SAFETY_FIELDS = [

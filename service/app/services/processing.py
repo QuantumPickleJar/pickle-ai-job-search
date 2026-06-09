@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +19,22 @@ from app.config import Settings
 from app.services.job_store import is_safe_identifier
 
 
+logger = logging.getLogger(__name__)
+
+
 class ProcessingError(RuntimeError):
     """Raised when a job cannot be processed into an application workspace."""
+
+
+@dataclass(frozen=True)
+class CoverLetterGenerationResult:
+    content: str
+    source: str
+    review_passes_enabled: bool
+    model_query_count_expected: int
+    model_query_count_actual: int
+    fallback_reason: str | None = None
+    validation_error: str | None = None
 
 
 DEFAULT_CANDIDATE_NAME = "Vincent Morrill"
@@ -51,6 +67,9 @@ Write plain text only.
 Do not include headings or code fences.
 Use only information from the provided Letter Brief.
 Never include internal evaluation language, requirement copy, or self-disqualifying statements.
+Use 1 to 2 concrete evidence bullets from evidence_bullets and weave them naturally into prose.
+Do not list every evidence bullet.
+Avoid generic filler and avoid repeating broad phrases like enterprise application development without concrete evidence.
 """
 
 COVER_LETTER_CRITIQUE_SYSTEM_PROMPT = """You are a strict cover letter editor.
@@ -64,6 +83,9 @@ COVER_LETTER_FINAL_SYSTEM_PROMPT = """You finalize cover letters for submission 
 Write plain text only.
 Use the Letter Brief, draft, and critique.
 Do not include headings, JSON, or code fences.
+Use 1 to 2 concrete evidence bullets from evidence_bullets and weave them naturally into prose.
+Do not list every evidence bullet.
+Avoid generic filler and avoid repeating broad phrases like enterprise application development without concrete evidence.
 """
 
 
@@ -148,7 +170,7 @@ def generate_cover_letter(
     )
 
     try:
-        content = generate_cover_letter_with_review(
+        result = generate_cover_letter_with_review(
             job=job,
             fit=fit,
             profile_context=profile_context,
@@ -162,7 +184,21 @@ def generate_cover_letter(
         raise ProcessingError(f"cover letter generation failed: {exc}") from exc
 
     output_path = app_dir / "cover-letter.md"
-    output_path.write_text(content + "\n", encoding="utf-8")
+    output_path.write_text(result.content + "\n", encoding="utf-8")
+    meta = {
+        "source": result.source,
+        "review_passes_enabled": result.review_passes_enabled,
+        "model_query_count_expected": result.model_query_count_expected,
+        "model_query_count_actual": result.model_query_count_actual,
+        "fallback_reason": result.fallback_reason,
+        "validation_error": result.validation_error,
+    }
+    (app_dir / "cover-letter.meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if result.source == "deterministic-fallback" and result.fallback_reason:
+        logger.warning("Cover letter fallback used application_id=%s reason=%s", application_id, result.fallback_reason)
     return output_path
 
 
@@ -674,6 +710,11 @@ def build_cover_letter_brief(
         "unit-tested feature work",
         "C#/.NET/SQL",
     ]
+    evidence_bullets = build_cover_letter_evidence(profile_context, {
+        "matched_skills": matched_skills,
+        "safe_resume_keywords": safe_keywords,
+        "safe_enterprise_themes": enterprise_themes,
+    })
 
     return {
         "role_title": role_title,
@@ -688,8 +729,50 @@ def build_cover_letter_brief(
         "cover_letter_angle": cover_letter_angle,
         "verified_profile_context": profile_context,
         "safe_enterprise_themes": enterprise_themes,
+        "evidence_bullets": evidence_bullets,
         "document_inventory_context": documents_context,
     }
+
+
+def build_cover_letter_evidence(profile_context: str, letter_brief: dict[str, Any]) -> list[str]:
+    text = profile_context.casefold()
+    evidence: list[str] = []
+
+    def add_once(item: str) -> None:
+        if item not in evidence:
+            evidence.append(item)
+
+    if "bizlink" in text:
+        add_once(
+            "Contributed feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow."
+        )
+    if any(token in text for token in ("uwo", "portal", "rostar", "university it")):
+        add_once(
+            "Contributed to internal university IT applications with backend and application development, debugging, and documentation work."
+        )
+    if any(token in text for token in ("applied benefits", "applied systems", "benefits", "insurance software")):
+        add_once(
+            "Worked on benefits and insurance software involving business workflows, automation, testing, and pull-request-based development."
+        )
+    if any(token in text for token in ("c#", ".net", "sql", "angular", "typescript")):
+        add_once(
+            "Built and maintained application features using C#, .NET, and SQL with practical collaboration in code review and testing workflows."
+        )
+    if any(token in text for token in ("unit test", "unit-tested", "testing")):
+        add_once(
+            "Implemented and refined unit-tested feature work to improve behavior reliability and maintainability in production-facing workflows."
+        )
+
+    if not evidence:
+        skills = [str(item).strip() for item in letter_brief.get("matched_skills", []) if str(item).strip()]
+        top_skills = skills[:3]
+        if top_skills:
+            skill_line = ", ".join(top_skills)
+            add_once(f"Contributed feature work and testing-focused improvements in application development contexts using {skill_line}.")
+        else:
+            add_once("Contributed feature work, debugging support, and testing-focused improvements in internal application workflows.")
+
+    return evidence[:6]
 
 
 def build_cover_letter_critique_prompt(letter_brief: dict[str, Any], draft: str) -> str:
@@ -721,6 +804,7 @@ Rubric:
 - avoids generic filler such as "robust solutions that seamlessly integrate"
 - avoids saying "ideal candidate"
 - sounds confident but not inflated
+- uses 1 to 2 concrete evidence bullets naturally
 """
 
 
@@ -740,6 +824,8 @@ Requirements:
   Vincent Morrill
 - 3 to 4 concise paragraphs before the sign-off
 - no headings, no bullets, no code fences
+- use 1 to 2 concrete evidence bullets from evidence_bullets
+- avoid generic filler and avoid broad claims without concrete evidence
 
 Letter Brief JSON:
 {brief_json}
@@ -755,16 +841,20 @@ Critique:
 def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     role_title = str(letter_brief.get("role_title") or "Application Services Software Engineer").strip()
     company = str(letter_brief.get("company") or "the company").strip()
-    skills = letter_brief.get("matched_skills") or []
-    safe_skills = [str(skill).strip() for skill in skills if str(skill).strip()][:4]
-    stack = ", ".join(safe_skills) if safe_skills else "C#, .NET Core, SQL, and enterprise application development"
+    stack = "C#, .NET Core, and SQL"
+    evidence_bullets = [str(item).strip() for item in letter_brief.get("evidence_bullets", []) if str(item).strip()]
+    evidence_sentence = "contributed to internal and enterprise-grade systems through feature delivery, testing, and workflow improvements"
+    if evidence_bullets:
+        evidence_sentence = evidence_bullets[0]
+        if evidence_sentence.endswith("."):
+            evidence_sentence = evidence_sentence[:-1]
 
     letter = (
         "Dear Hiring Manager,\n\n"
-        f"I am excited to apply for the {role_title} position at {company}. My background in {stack} aligns well with the role's focus on supporting business-critical application services.\n\n"
-        "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and collaborating through pull-request-based development. My experience includes application work in university IT, benefits and insurance software, and insurance quoting workflows, giving me a practical foundation for building reliable software that supports real business operations.\n\n"
-        "I am especially interested in this role because it combines software development, stakeholder support, and operational problem-solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I also value transparent communication, measurable outcomes, and collaborative iteration with teammates who own software quality together.\n\n"
-        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team.\n\n"
+        f"I am applying for the {role_title} position at {company}. My background in {stack} and enterprise application development aligns with the role's focus on maintaining and improving business-critical application services. I am comfortable contributing in environments where software quality, reliability, and steady iteration are important to day-to-day operations.\n\n"
+        f"In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. My experience includes {evidence_sentence}, which gives me a practical foundation for supporting software used in real operational workflows. That work required balancing delivery speed with code clarity and maintainability so teams can continue building on the same systems over time.\n\n"
+        "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I also bring a practical mindset for debugging issues, clarifying requirements, and implementing changes that are understandable for both developers and business users.\n\n"
+        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team. I am motivated to contribute in a role where dependable software delivery and collaborative improvement are core expectations.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
     )
@@ -780,14 +870,34 @@ def generate_cover_letter_with_review(
     provider: ModelProvider,
     review_passes: bool = True,
     query_callback: Any | None = None,
-) -> str:
+) -> CoverLetterGenerationResult:
     letter_brief = build_cover_letter_brief(job, fit, profile_context, documents_context, identity)
-    fallback = build_fallback_cover_letter(letter_brief)
+    fallback_content = sanitize_generated_cover_letter(build_fallback_cover_letter(letter_brief))
+    expected_queries = 3 if review_passes else 1
+    actual_queries = 0
+
+    def record_query(stage: str) -> None:
+        nonlocal actual_queries
+        actual_queries += 1
+        if callable(query_callback):
+            query_callback(stage)
+
+    def fallback_result(reason: str, validation_error: str | None = None) -> CoverLetterGenerationResult:
+        sanitized_reason = sanitize_cover_letter_reason(reason)
+        validate_generated_cover_letter(fallback_content)
+        return CoverLetterGenerationResult(
+            content=fallback_content,
+            source="deterministic-fallback",
+            review_passes_enabled=review_passes,
+            model_query_count_expected=expected_queries,
+            model_query_count_actual=actual_queries,
+            fallback_reason=sanitized_reason,
+            validation_error=validation_error,
+        )
 
     try:
         if review_passes:
-            if callable(query_callback):
-                query_callback("draft-pass")
+            record_query("draft-pass")
             draft_response = provider.complete(
                 ModelRequest(
                     system_prompt=COVER_LETTER_DRAFT_SYSTEM_PROMPT,
@@ -799,10 +909,9 @@ def generate_cover_letter_with_review(
             )
             draft = sanitize_generated_cover_letter(draft_response.text)
             if not draft:
-                raise ProcessingError("cover letter generation returned empty draft")
+                return fallback_result("final model output failed validation: cover letter generation returned empty draft")
 
-            if callable(query_callback):
-                query_callback("critique-pass")
+            record_query("critique-pass")
             critique_response = provider.complete(
                 ModelRequest(
                     system_prompt=COVER_LETTER_CRITIQUE_SYSTEM_PROMPT,
@@ -814,8 +923,7 @@ def generate_cover_letter_with_review(
             )
             critique = critique_response.text.strip()
 
-            if callable(query_callback):
-                query_callback("final-rewrite-pass")
+            record_query("final-rewrite-pass")
             final_response = provider.complete(
                 ModelRequest(
                     system_prompt=COVER_LETTER_FINAL_SYSTEM_PROMPT,
@@ -826,9 +934,9 @@ def generate_cover_letter_with_review(
                 )
             )
             content = sanitize_generated_cover_letter(final_response.text)
+            source = "model-final"
         else:
-            if callable(query_callback):
-                query_callback("single-pass")
+            record_query("single-pass")
             response = provider.complete(
                 ModelRequest(
                     system_prompt=COVER_LETTER_SINGLE_PASS_SYSTEM_PROMPT,
@@ -839,15 +947,36 @@ def generate_cover_letter_with_review(
                 )
             )
             content = sanitize_generated_cover_letter(response.text)
+            source = "model-single-pass"
 
         if not content:
-            raise ProcessingError("cover letter generation returned empty content")
-        validate_generated_cover_letter(content)
-        return content
-    except (ModelProviderError, ProcessingError):
-        sanitized_fallback = sanitize_generated_cover_letter(fallback)
-        validate_generated_cover_letter(sanitized_fallback)
-        return sanitized_fallback
+            return fallback_result("final model output failed validation: cover letter generation returned empty content")
+        try:
+            validate_generated_cover_letter(content)
+        except ProcessingError as exc:
+            reason = f"final model output failed validation: {exc}"
+            return fallback_result(reason, validation_error=sanitize_cover_letter_reason(str(exc)))
+
+        return CoverLetterGenerationResult(
+            content=content,
+            source=source,
+            review_passes_enabled=review_passes,
+            model_query_count_expected=expected_queries,
+            model_query_count_actual=actual_queries,
+            fallback_reason=None,
+            validation_error=None,
+        )
+    except ModelProviderError as exc:
+        reason = f"model generation failed: {exc}"
+        return fallback_result(reason)
+
+
+def sanitize_cover_letter_reason(reason: str) -> str:
+    cleaned = reason.strip()
+    cleaned = re.sub(r"(?i)(x-api-key\s*[:=]\s*)([^\s,;]+)", r"\1[redacted]", cleaned)
+    cleaned = re.sub(r"(?i)(api[_-]?key\s*[:=]\s*)([^\s,;]+)", r"\1[redacted]", cleaned)
+    cleaned = re.sub(r"(?i)(bearer\s+)([a-z0-9._\-]+)", r"\1[redacted]", cleaned)
+    return cleaned[:500]
 
 
 def build_cv_prompt(
