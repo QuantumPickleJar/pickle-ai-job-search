@@ -102,6 +102,22 @@ class UiSafetyTests(unittest.TestCase):
         self.assertIn('action="/ui/tasks/' + ("b" * 32) + '/delete"', rendered)
         self.assertIn("Delete selected tasks", rendered)
 
+    def test_task_table_status_badge_exposes_live_transition_attributes(self) -> None:
+        rendered = task_table(
+            [
+                {
+                    "task_id": "c" * 32,
+                    "job_id": "job-456",
+                    "task_type": "process-job",
+                    "state": "running",
+                    "updated_at": "2026-06-09T12:00:00+00:00",
+                }
+            ]
+        )
+
+        self.assertIn('data-status-badge="1"', rendered)
+        self.assertIn('data-badge-state="running"', rendered)
+
     def test_task_detail_page_renders_error_text(self) -> None:
         with TemporaryDirectory(prefix="ui-task-detail-") as temporary_dir:
             data_dir = Path(temporary_dir)

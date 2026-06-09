@@ -305,6 +305,38 @@ tbody tr:last-child td {
   font-weight: 700;
   text-transform: capitalize;
   white-space: nowrap;
+  transition:
+    background-color 240ms ease,
+    border-color 240ms ease,
+    color 240ms ease,
+    box-shadow 240ms ease,
+    transform 240ms ease;
+}
+
+.badge-transition-enter {
+  animation: badge-status-shift 560ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes badge-status-shift {
+  from {
+    background: var(--badge-from-background, #f1f4f2);
+    border-color: var(--badge-from-border, #cbd3d0);
+    color: var(--badge-from-color, #44504c);
+    box-shadow: 0 0 0 0 rgb(47 111 94 / 0%);
+    transform: translateY(1px);
+  }
+
+  55% {
+    box-shadow: 0 0 0 4px rgb(47 111 94 / 12%);
+  }
+
+  to {
+    background: var(--badge-to-background, #f1f4f2);
+    border-color: var(--badge-to-border, #cbd3d0);
+    color: var(--badge-to-color, #44504c);
+    box-shadow: 0 0 0 0 rgb(47 111 94 / 0%);
+    transform: translateY(0);
+  }
 }
 
 .badge-succeeded,

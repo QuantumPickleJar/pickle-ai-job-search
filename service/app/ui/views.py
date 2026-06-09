@@ -96,7 +96,7 @@ def status_badge(value: Any) -> str:
         character for character in text.lower() if character.isalnum() or character == "-"
     )
     return (
-        f'<span class="badge badge-{css_value}">'
+        f'<span class="badge badge-{css_value}" data-status-badge="1" data-badge-state="{escape(css_value, quote=True)}">'
         f'{escape(text.replace("_", " "))}</span>'
     )
 
