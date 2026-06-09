@@ -17,6 +17,7 @@ from ai_job_search.providers import OllamaProvider
 
 from app.config import Settings
 from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
+from app.services.evidence_tools import CoverLetterQualityIssue
 from app.services.evidence_tools import build_evidence_queries
 from app.services.evidence_tools import is_dirty_cover_letter_text
 from app.services.evidence_tools import list_profile_evidence_sources
@@ -217,6 +218,7 @@ def generate_cover_letter(
             provider=provider,
             review_passes=settings.cover_letter_review_passes,
             query_callback=query_callback,
+            app_dir=app_dir,
         )
     except ModelProviderError as exc:
         raise ProcessingError(f"cover letter generation failed: {exc}") from exc
@@ -332,6 +334,52 @@ def validate_generated_cover_letter(content: str) -> None:
     word_count = len(re.findall(r"\b\w+\b", content))
     if word_count < 180 or word_count > 500:
         raise ProcessingError("cover letter generation returned unsafe output. Word count outside acceptable range.")
+
+
+def _clip_cover_letter_sentence(text: str, limit: int = 220) -> str:
+    normalized = " ".join(str(text).split()).strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
+
+
+def format_cover_letter_quality_issue(
+    prefix: str,
+    issue: CoverLetterQualityIssue,
+    field_path: str | None = None,
+) -> str:
+    sentence = _clip_cover_letter_sentence(issue.sentence, limit=220)
+    location = f"{field_path} " if field_path else ""
+    return f"{prefix}: {location}failed sentence rule {issue.rule}: \"{sentence}\""
+
+
+def _write_cover_letter_brief_error(
+    app_dir: Path | None,
+    *,
+    error_message: str,
+    field_path: str | None = None,
+    rule: str | None = None,
+    offending_sentence: str | None = None,
+    source_file: str | None = None,
+    evidence_card_index: int | None = None,
+) -> None:
+    if app_dir is None or not app_dir.is_dir():
+        return
+    payload = {
+        "error_message": error_message,
+        "field_path": field_path,
+        "rule": rule,
+        "offending_sentence": _clip_cover_letter_sentence(offending_sentence or "", limit=220) if offending_sentence else None,
+        "source_file": source_file,
+        "evidence_card_index": evidence_card_index,
+    }
+    try:
+        (app_dir / "cover-letter.brief-error.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.debug("Unable to write cover-letter.brief-error.json", exc_info=True)
 
 
 def polish_evidence_for_cover_letter(evidence_text: str) -> str:
@@ -962,33 +1010,157 @@ def build_cover_letter_brief(
     }
 
 
-def validate_cover_letter_brief(letter_brief: dict[str, Any], allow_generic_evidence: bool = False) -> None:
+def validate_cover_letter_brief(
+    letter_brief: dict[str, Any],
+    allow_generic_evidence: bool = False,
+    app_dir: Path | None = None,
+) -> None:
+    prefix = "cover letter brief invalid"
+
+    def fail(
+        message: str,
+        *,
+        field_path: str | None = None,
+        rule: str | None = None,
+        offending_sentence: str | None = None,
+        source_file: str | None = None,
+        evidence_card_index: int | None = None,
+    ) -> None:
+        _write_cover_letter_brief_error(
+            app_dir,
+            error_message=message,
+            field_path=field_path,
+            rule=rule,
+            offending_sentence=offending_sentence,
+            source_file=source_file,
+            evidence_card_index=evidence_card_index,
+        )
+        raise ProcessingError(message)
+
+    def fail_issue(
+        issue: CoverLetterQualityIssue,
+        *,
+        field_path: str | None = None,
+        source_file: str | None = None,
+        evidence_card_index: int | None = None,
+    ) -> None:
+        message = format_cover_letter_quality_issue(prefix, issue, field_path=field_path)
+        fail(
+            message,
+            field_path=field_path,
+            rule=issue.rule,
+            offending_sentence=issue.sentence,
+            source_file=source_file,
+            evidence_card_index=evidence_card_index,
+        )
+
+    def validate_field(
+        value: Any,
+        *,
+        field_path: str,
+        source_file: str | None = None,
+        evidence_card_index: int | None = None,
+    ) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        lowered = text.casefold()
+        if "minimum 2-3 years" in lowered:
+            fail_issue(
+                CoverLetterQualityIssue(
+                    rule="internal_requirement",
+                    message="Contains internal requirement language",
+                    sentence=text,
+                ),
+                field_path=field_path,
+                source_file=source_file,
+                evidence_card_index=evidence_card_index,
+            )
+        if "todo" in lowered:
+            fail_issue(
+                CoverLetterQualityIssue(
+                    rule="todo_placeholder",
+                    message="Contains TODO placeholder",
+                    sentence=text,
+                ),
+                field_path=field_path,
+                source_file=source_file,
+                evidence_card_index=evidence_card_index,
+            )
+        issues = lint_cover_letter_text(text)
+        if issues:
+            fail_issue(
+                issues[0],
+                field_path=field_path,
+                source_file=source_file,
+                evidence_card_index=evidence_card_index,
+            )
+        if is_dirty_cover_letter_text(text):
+            fail_issue(
+                CoverLetterQualityIssue(
+                    rule="dirty_scaffold_text",
+                    message="Contains dirty scaffold/template text",
+                    sentence=text,
+                ),
+                field_path=field_path,
+                source_file=source_file,
+                evidence_card_index=evidence_card_index,
+            )
+
     role = str(letter_brief.get("role_title") or "").strip()
     company = str(letter_brief.get("company") or "").strip()
     candidate_name = str(letter_brief.get("candidate_name") or "").strip()
     if not role:
-        raise ProcessingError("cover letter brief invalid: role_title is required")
+        fail(f"{prefix}: role_title is required", field_path="role_title", rule="required_field")
     if not company:
-        raise ProcessingError("cover letter brief invalid: company is required")
+        fail(f"{prefix}: company is required", field_path="company", rule="required_field")
     if candidate_name != DEFAULT_CANDIDATE_NAME:
-        raise ProcessingError("cover letter brief invalid: candidate_name mismatch")
+        fail(f"{prefix}: candidate_name mismatch", field_path="candidate_name", rule="identity_mismatch")
 
-    serialized = json.dumps(letter_brief, ensure_ascii=False).casefold()
-    if "minimum 2-3 years" in serialized or "todo" in serialized:
-        raise ProcessingError("cover letter brief invalid: contains internal requirement or TODO text")
-    if lint_cover_letter_text(serialized):
-        raise ProcessingError("cover letter brief invalid: contains sentence-level scaffold/template issues")
+    validate_field(letter_brief.get("role_title"), field_path="role_title")
+    validate_field(letter_brief.get("company"), field_path="company")
+    validate_field(letter_brief.get("location"), field_path="location")
 
-    for item in letter_brief.get("matched_skills", []):
-        value = str(item).strip()
-        if is_internal_only_requirement(value) or is_dirty_cover_letter_text(value):
-            raise ProcessingError("cover letter brief invalid: contains unsafe matched skill")
-    for item in letter_brief.get("safe_resume_keywords", []):
-        value = str(item).strip()
-        if is_internal_only_requirement(value) or is_dirty_cover_letter_text(value):
-            raise ProcessingError("cover letter brief invalid: contains unsafe keyword")
+    for index, item in enumerate(letter_brief.get("matched_skills", [])):
+        validate_field(item, field_path=f"matched_skills[{index}]")
+    for index, item in enumerate(letter_brief.get("safe_resume_keywords", [])):
+        validate_field(item, field_path=f"safe_resume_keywords[{index}]")
+    for index, item in enumerate(letter_brief.get("reasons_to_apply", [])):
+        validate_field(item, field_path=f"reasons_to_apply[{index}]")
+
+    validate_field(letter_brief.get("suggested_resume_angle"), field_path="suggested_resume_angle")
+    validate_field(letter_brief.get("cover_letter_angle"), field_path="cover_letter_angle")
+
+    for index, item in enumerate(letter_brief.get("safe_enterprise_themes", [])):
+        validate_field(item, field_path=f"safe_enterprise_themes[{index}]")
 
     cards = [card for card in letter_brief.get("evidence_cards", []) if isinstance(card, dict)]
+    for card_index, card in enumerate(cards):
+        source_file = str(card.get("source_file") or "unknown").strip()
+        validate_field(
+            card.get("theme"),
+            field_path=f"evidence_cards[{card_index}].theme",
+            source_file=source_file,
+            evidence_card_index=card_index,
+        )
+        validate_field(
+            card.get("text"),
+            field_path=f"evidence_cards[{card_index}].text",
+            source_file=source_file,
+            evidence_card_index=card_index,
+        )
+        validate_field(
+            card.get("claim_boundary"),
+            field_path=f"evidence_cards[{card_index}].claim_boundary",
+            source_file=source_file,
+            evidence_card_index=card_index,
+        )
+
+    serialized = json.dumps(letter_brief, ensure_ascii=False)
+    serialized_issues = lint_cover_letter_text(serialized)
+    if serialized_issues:
+        fail_issue(serialized_issues[0], field_path="letter_brief(serialized)")
+
     clean_cards = [
         card
         for card in cards
@@ -996,7 +1168,7 @@ def validate_cover_letter_brief(letter_brief: dict[str, Any], allow_generic_evid
         and not lint_cover_letter_text(str(card.get("text") or ""))
     ]
     if not clean_cards and not allow_generic_evidence:
-        raise ProcessingError("cover letter brief invalid: no clean evidence cards")
+        fail(f"{prefix}: no clean evidence cards", field_path="evidence_cards", rule="no_clean_evidence_cards")
 
 
 def build_cover_letter_evidence(profile_context: str, letter_brief: dict[str, Any]) -> list[str]:
@@ -1186,6 +1358,7 @@ def generate_cover_letter_with_review(
     provider: ModelProvider,
     review_passes: bool = True,
     query_callback: Any | None = None,
+    app_dir: Path | None = None,
 ) -> CoverLetterGenerationResult:
     actual_queries = 0
     evidence_query_count_actual = 0
@@ -1275,7 +1448,7 @@ def generate_cover_letter_with_review(
     )
 
     try:
-        validate_cover_letter_brief(letter_brief)
+        validate_cover_letter_brief(letter_brief, app_dir=app_dir)
     except ProcessingError:
         repaired_cards = []
         for card in letter_brief.get("evidence_cards", []):
@@ -1296,7 +1469,7 @@ def generate_cover_letter_with_review(
                 }
             ]
         letter_brief["evidence_cards"] = repaired_cards[:max_evidence_cards]
-        validate_cover_letter_brief(letter_brief, allow_generic_evidence=True)
+        validate_cover_letter_brief(letter_brief, allow_generic_evidence=True, app_dir=app_dir)
 
     fallback_content = sanitize_generated_cover_letter(build_fallback_cover_letter(letter_brief))
     fallback_note = None
