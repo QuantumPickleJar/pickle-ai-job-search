@@ -294,6 +294,11 @@ def sanitize_generated_cover_letter(content: str) -> str:
 
 def validate_generated_cover_letter(content: str) -> None:
     lowered = content.lower()
+
+    def matched_fragment(fragment: str) -> str:
+        match = re.search(re.escape(fragment), content, re.IGNORECASE)
+        return match.group(0) if match else fragment
+
     issues = lint_cover_letter_text(content)
     if issues:
         issue = issues[0]
@@ -308,7 +313,7 @@ def validate_generated_cover_letter(content: str) -> None:
         if phrase in lowered:
             raise ProcessingError(
                 "cover letter generation returned unsafe output. "
-                f"Blocked phrase found: {phrase}"
+                f"Blocked phrase found: {matched_fragment(phrase)}"
             )
     if "##" in content or "```" in content or re.search(r"(?m)^#\s", content):
         raise ProcessingError("cover letter generation returned unsafe output. Invalid markdown structure.")
@@ -377,7 +382,7 @@ def validate_generated_cover_letter(content: str) -> None:
         if marker in lowered:
             raise ProcessingError(
                 "cover letter generation returned unsafe output. "
-                f"Instructional/scaffold source text detected: {marker}"
+                f"Instructional/scaffold source text detected: {matched_fragment(marker)}"
             )
     word_count = len(re.findall(r"\b\w+\b", content))
     if word_count < 180 or word_count > 500:
