@@ -83,6 +83,33 @@ TEMPLATE_LABEL_PREFIXES = (
     "project name",
 )
 
+DIRTY_EVIDENCE_MARKERS = (
+    "todo",
+    "tbd",
+    "fixme",
+    "relevant coursework or projects",
+    "add verified",
+    "project template",
+    "known technical areas",
+    "candidate project leads",
+    "manual review notes",
+    "missing details",
+    "technical skills to verify",
+    "where supported by actual projects",
+    "safe themes to verify",
+    "verify and expand",
+    "unless verified",
+    "claims to avoid",
+    "do not claim",
+    "safe claims",
+    "context:",
+    "purpose:",
+    "role:",
+    "technologies:",
+    "what was built:",
+    "outcome:",
+)
+
 ACCOMPLISHMENT_MARKERS = (
     "contributed",
     "implemented",
@@ -214,18 +241,34 @@ def _clip_text(text: str, limit: int = 300) -> str:
     return clean[: limit - 3].rstrip() + "..."
 
 
+def is_dirty_cover_letter_text(text: str) -> bool:
+    normalized = " ".join(str(text).split()).strip()
+    if not normalized:
+        return True
+
+    lowered = normalized.casefold()
+    if any(marker in lowered for marker in DIRTY_EVIDENCE_MARKERS):
+        return True
+    if re.search(r":\s*todo\b", lowered):
+        return True
+    if re.fullmatch(r"[a-z ]{2,40}:", lowered):
+        return True
+    if lowered.startswith("add verified"):
+        return True
+    if any(lowered.startswith(prefix) for prefix in TEMPLATE_LABEL_PREFIXES):
+        return True
+    if any(token in lowered for token in ("template", "placeholder", "instruction")) and not any(
+        marker in lowered for marker in ACCOMPLISHMENT_MARKERS
+    ):
+        return True
+    return False
+
+
 def is_applicant_facing_evidence(text: str) -> bool:
     raw = " ".join(text.split()).strip()
     if not raw:
         return False
-
-    lowered = raw.casefold()
-    label_only = re.fullmatch(r"[a-z ]{2,35}:", lowered)
-    if label_only is not None:
-        return False
-    if lowered.startswith("add verified"):
-        return False
-    if any(lowered.startswith(prefix) for prefix in TEMPLATE_LABEL_PREFIXES):
+    if is_dirty_cover_letter_text(raw):
         return False
 
     lowered = " ".join(text.casefold().split())
@@ -302,7 +345,7 @@ def search_profile_evidence(
         raise ValueError("unsafe evidence query")
 
     normalized_query = " ".join(query.split())
-    max_cards = max(1, min(max_results, 6))
+    max_cards = max(1, min(max_results, 10))
 
     disallowed_text = _read_allowlisted_file(settings, "disallowed_claims.md")
 
@@ -379,15 +422,16 @@ def build_evidence_queries(job: dict[str, Any], fit: dict[str, Any]) -> list[str
         normalized = " ".join(query.split())
         if normalized and normalized not in deduped and not _is_unsafe_query(normalized):
             deduped.append(normalized)
-    return deduped[:5]
+    return deduped[:10]
 
 
 def plan_cover_letter_evidence_queries(
     job: dict[str, Any],
     fit: dict[str, Any],
     provider: ModelProvider,
+    max_queries: int = 10,
 ) -> list[str]:
-    deterministic = build_evidence_queries(job, fit)
+    deterministic = build_evidence_queries(job, fit)[:max_queries]
     request = ModelRequest(
         system_prompt=(
             "You produce safe evidence-search query plans. "
@@ -400,7 +444,7 @@ def plan_cover_letter_evidence_queries(
                 "matched_skills": fit.get("matched_skills", []),
                 "reasons_to_apply": fit.get("reasons_to_apply", []),
                 "constraints": [
-                    "At most 5 queries",
+                    "At most 10 queries",
                     "No path separators",
                     "No filenames",
                     "Focus on concrete candidate evidence",
@@ -427,8 +471,8 @@ def plan_cover_letter_evidence_queries(
                 continue
             if query not in cleaned:
                 cleaned.append(query)
-            if len(cleaned) >= 5:
+            if len(cleaned) >= max_queries:
                 break
-        return cleaned or deterministic
+        return (cleaned or deterministic)[:max_queries]
     except (ModelProviderError, json.JSONDecodeError, OSError, ValueError, TypeError):
         return deterministic

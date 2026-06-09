@@ -18,6 +18,7 @@ from ai_job_search.providers import OllamaProvider
 from app.config import Settings
 from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
 from app.services.evidence_tools import build_evidence_queries
+from app.services.evidence_tools import is_dirty_cover_letter_text
 from app.services.evidence_tools import list_profile_evidence_sources
 from app.services.evidence_tools import plan_cover_letter_evidence_queries
 from app.services.evidence_tools import search_profile_evidence
@@ -38,8 +39,13 @@ class CoverLetterGenerationResult:
     review_passes_enabled: bool
     model_query_count_expected: int
     model_query_count_actual: int
+    evidence_query_count_actual: int
+    dirty_evidence_rejected_count: int
     evidence_cards_used: list[dict[str, str]]
+    evidence_cards_rejected_sample: list[str]
     tool_access: dict[str, Any]
+    repair_attempted: bool = False
+    repair_successful: bool = False
     fallback_reason: str | None = None
     validation_error: str | None = None
 
@@ -65,6 +71,13 @@ COVER_LETTER_BLOCKED_PHRASES = [
     "i lack",
     "lacks the minimum",
     "limited exposure",
+    "todo",
+    "tbd",
+    "fixme",
+    "relevant coursework or projects",
+    "examples include relevant",
+    "examples include todo",
+    ": todo",
     "where supported by actual projects",
     "add verified",
     "project template",
@@ -214,8 +227,13 @@ def generate_cover_letter(
         "review_passes_enabled": result.review_passes_enabled,
         "model_query_count_expected": result.model_query_count_expected,
         "model_query_count_actual": result.model_query_count_actual,
+        "evidence_query_count_actual": result.evidence_query_count_actual,
+        "dirty_evidence_rejected_count": result.dirty_evidence_rejected_count,
         "evidence_cards_used": result.evidence_cards_used,
+        "evidence_cards_rejected_sample": result.evidence_cards_rejected_sample,
         "tool_access": result.tool_access,
+        "repair_attempted": result.repair_attempted,
+        "repair_successful": result.repair_successful,
         "fallback_reason": result.fallback_reason,
         "validation_error": result.validation_error,
     }
@@ -252,13 +270,15 @@ def sanitize_generated_cover_letter(content: str) -> str:
 
 def validate_generated_cover_letter(content: str) -> None:
     lowered = content.lower()
+    if is_dirty_cover_letter_text(content):
+        raise ProcessingError("cover letter generation returned unsafe output. Dirty scaffold/template text detected.")
     for phrase in COVER_LETTER_BLOCKED_PHRASES:
         if phrase in lowered:
             raise ProcessingError(
                 "cover letter generation returned unsafe output. "
                 f"Blocked phrase found: {phrase}"
             )
-    if "##" in content or "```" in content:
+    if "##" in content or "```" in content or re.search(r"(?m)^#\s", content):
         raise ProcessingError("cover letter generation returned unsafe output. Invalid markdown structure.")
     if not content.startswith("Dear Hiring Manager,"):
         raise ProcessingError("cover letter generation returned unsafe output. Missing required greeting.")
@@ -289,6 +309,8 @@ def validate_generated_cover_letter(content: str) -> None:
         "examples include context:",
         "examples include purpose:",
         "examples include role:",
+        "examples include relevant",
+        "examples include todo",
     )
     for fragment in examples_include_blocks:
         if fragment in lowered:
@@ -296,6 +318,8 @@ def validate_generated_cover_letter(content: str) -> None:
                 "cover letter generation returned unsafe output. Scaffold evidence phrase detected. "
                 f"Fragment found: {fragment}"
             )
+    if any(fragment in lowered for fragment in ("project template", "known technical areas", "manual review notes", "candidate project leads")):
+        raise ProcessingError("cover letter generation returned unsafe output. Choppy scaffold fragment detected.")
     word_count = len(re.findall(r"\b\w+\b", content))
     if word_count < 180 or word_count > 500:
         raise ProcessingError("cover letter generation returned unsafe output. Word count outside acceptable range.")
@@ -304,6 +328,9 @@ def validate_generated_cover_letter(content: str) -> None:
 def polish_evidence_for_cover_letter(evidence_text: str) -> str:
     raw = " ".join(str(evidence_text).split()).strip()
     if not raw:
+        return ""
+
+    if is_dirty_cover_letter_text(raw):
         return ""
 
     lowered = raw.casefold()
@@ -359,6 +386,8 @@ def polish_evidence_for_cover_letter(evidence_text: str) -> str:
 def is_safe_cover_letter_evidence_fragment(text: str) -> bool:
     normalized = " ".join(str(text).split()).strip()
     if not normalized:
+        return False
+    if is_dirty_cover_letter_text(normalized):
         return False
     lowered = normalized.casefold()
     blocked = (
@@ -807,6 +836,7 @@ def build_cover_letter_brief(
     documents_context: str,
     identity: dict[str, str],
     letter_evidence_cards: list[dict[str, Any]] | None = None,
+    max_evidence_cards: int = 10,
 ) -> dict[str, Any]:
     role_title = str(job.get("title") or "the target role").strip()
     company = str(job.get("company") or "the target company").strip()
@@ -818,17 +848,23 @@ def build_cover_letter_brief(
     matched_skills = [
         str(item).strip()
         for item in fit.get("matched_skills", [])
-        if str(item).strip() and not is_internal_only_requirement(str(item))
+        if str(item).strip()
+        and not is_internal_only_requirement(str(item))
+        and not is_dirty_cover_letter_text(str(item))
     ]
     safe_keywords = [
         str(item).strip()
         for item in fit.get("resume_keywords_to_include", [])
-        if str(item).strip() and not is_internal_only_requirement(str(item))
+        if str(item).strip()
+        and not is_internal_only_requirement(str(item))
+        and not is_dirty_cover_letter_text(str(item))
     ]
     reasons_to_apply = [
         str(item).strip()
         for item in fit.get("reasons_to_apply", [])
-        if str(item).strip() and not is_internal_only_requirement(str(item))
+        if str(item).strip()
+        and not is_internal_only_requirement(str(item))
+        and not is_dirty_cover_letter_text(str(item))
     ]
     suggested_resume_angle = str(fit.get("suggested_resume_angle") or "").strip()
     if is_internal_only_requirement(suggested_resume_angle):
@@ -846,6 +882,7 @@ def build_cover_letter_brief(
         "C#/.NET/SQL",
     ]
     evidence_cards_raw = letter_evidence_cards if isinstance(letter_evidence_cards, list) else []
+    max_cards = max(1, min(max_evidence_cards, 10))
     evidence_cards = [
         {
             "theme": str(item.get("theme") or "Evidence").strip(),
@@ -854,8 +891,10 @@ def build_cover_letter_brief(
             "claim_boundary": str(item.get("claim_boundary") or "Do not overclaim ownership or unverified platform expertise.").strip(),
         }
         for item in evidence_cards_raw
-        if isinstance(item, dict) and str(item.get("text") or "").strip()
-    ][:6]
+        if isinstance(item, dict)
+        and str(item.get("text") or "").strip()
+        and not is_dirty_cover_letter_text(str(item.get("text") or ""))
+    ][:max_cards]
 
     if not evidence_cards:
         fallback_bullets = build_cover_letter_evidence(
@@ -873,7 +912,18 @@ def build_cover_letter_brief(
                 "source_file": "profile_context",
                 "claim_boundary": "Do not overclaim ownership or unverified platform expertise.",
             }
-            for bullet in fallback_bullets[:4]
+            for bullet in fallback_bullets[:max_cards]
+            if not is_dirty_cover_letter_text(bullet)
+        ]
+
+    if not evidence_cards:
+        evidence_cards = [
+            {
+                "theme": "Fallback-safe evidence",
+                "text": "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts.",
+                "source_file": "fallback-safe",
+                "claim_boundary": "Do not overclaim ownership or unverified platform expertise.",
+            }
         ]
 
     return {
@@ -891,6 +941,36 @@ def build_cover_letter_brief(
         "evidence_cards": evidence_cards,
         "document_inventory_context": documents_context,
     }
+
+
+def validate_cover_letter_brief(letter_brief: dict[str, Any], allow_generic_evidence: bool = False) -> None:
+    role = str(letter_brief.get("role_title") or "").strip()
+    company = str(letter_brief.get("company") or "").strip()
+    candidate_name = str(letter_brief.get("candidate_name") or "").strip()
+    if not role:
+        raise ProcessingError("cover letter brief invalid: role_title is required")
+    if not company:
+        raise ProcessingError("cover letter brief invalid: company is required")
+    if candidate_name != DEFAULT_CANDIDATE_NAME:
+        raise ProcessingError("cover letter brief invalid: candidate_name mismatch")
+
+    serialized = json.dumps(letter_brief, ensure_ascii=False).casefold()
+    if "minimum 2-3 years" in serialized or "todo" in serialized:
+        raise ProcessingError("cover letter brief invalid: contains internal requirement or TODO text")
+
+    for item in letter_brief.get("matched_skills", []):
+        value = str(item).strip()
+        if is_internal_only_requirement(value) or is_dirty_cover_letter_text(value):
+            raise ProcessingError("cover letter brief invalid: contains unsafe matched skill")
+    for item in letter_brief.get("safe_resume_keywords", []):
+        value = str(item).strip()
+        if is_internal_only_requirement(value) or is_dirty_cover_letter_text(value):
+            raise ProcessingError("cover letter brief invalid: contains unsafe keyword")
+
+    cards = [card for card in letter_brief.get("evidence_cards", []) if isinstance(card, dict)]
+    clean_cards = [card for card in cards if not is_dirty_cover_letter_text(str(card.get("text") or ""))]
+    if not clean_cards and not allow_generic_evidence:
+        raise ProcessingError("cover letter brief invalid: no clean evidence cards")
 
 
 def build_cover_letter_evidence(profile_context: str, letter_brief: dict[str, Any]) -> list[str]:
@@ -997,6 +1077,36 @@ Critique:
 """
 
 
+def build_cover_letter_repair_prompt(
+        letter_brief: dict[str, Any],
+        unsafe_output: str,
+        validation_error: str,
+) -> str:
+        brief_json = json.dumps(letter_brief, ensure_ascii=False, indent=2)
+        return f"""Rewrite this cover letter so it is safe and submission-ready.
+
+Rules:
+- Return only the corrected cover letter.
+- Start with: Dear Hiring Manager,
+- End with:
+    Best regards,
+
+    Vincent Morrill
+- Remove all scaffold, TODO, template, and instruction text.
+- Use only factual content from the Letter Brief evidence_cards.
+- Keep the letter factual, concise, and sendable.
+
+Letter Brief JSON:
+{brief_json}
+
+Unsafe output:
+{unsafe_output}
+
+Validation error:
+{validation_error}
+"""
+
+
 def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     role_title = str(letter_brief.get("role_title") or "Application Services Software Engineer").strip()
     company = str(letter_brief.get("company") or "the company").strip()
@@ -1005,26 +1115,25 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     evidence_cards.sort(
         key=lambda item: 0 if str(item.get("source_file") or "") == "cover_letter_evidence.md" else 1
     )
-    evidence_texts = [str(item.get("text") or "").strip() for item in evidence_cards if str(item.get("text") or "").strip()]
+    evidence_texts = [
+        str(item.get("text") or "").strip()
+        for item in evidence_cards
+        if str(item.get("text") or "").strip() and not is_dirty_cover_letter_text(str(item.get("text") or ""))
+    ]
     polished_evidence = [polish_evidence_for_cover_letter(item) for item in evidence_texts]
     polished_evidence = [item for item in polished_evidence if is_safe_cover_letter_evidence_fragment(item)]
 
     if polished_evidence:
-        evidence_clause = (
-            f"Examples include {polished_evidence[0]}, giving me a practical foundation for supporting software used in real operational workflows."
-        )
+        evidence_clause = f"Examples include {polished_evidence[0]}, giving me a practical foundation for supporting software used in real operational workflows."
     else:
-        evidence_clause = (
-            "This hands-on work has given me a practical foundation for supporting software used in real operational workflows."
-        )
+        evidence_clause = "This hands-on work has given me a practical foundation for supporting software used in real operational workflows."
 
     letter = (
         "Dear Hiring Manager,\n\n"
         f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with the role's focus on maintaining and improving business-critical application services.\n\n"
         "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. "
-        f"{evidence_clause} "
-        "That work has required balancing delivery speed with maintainability so teams can safely extend shared application services over time.\n\n"
-        "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed. I also value clear communication with technical and business stakeholders when implementing reliable service improvements.\n\n"
+        f"{evidence_clause}\n\n"
+        "What interests me about this role is the mix of software development, stakeholder support, and production-minded problem solving. I would bring a grounded engineering approach, careful attention to maintainability, and a willingness to ramp into the team's platform environment where needed.\n\n"
         "Thank you for your time and consideration. I would welcome the opportunity to discuss how my application development experience can support your team.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
@@ -1044,12 +1153,31 @@ def generate_cover_letter_with_review(
     query_callback: Any | None = None,
 ) -> CoverLetterGenerationResult:
     actual_queries = 0
+    evidence_query_count_actual = 0
+    dirty_evidence_rejected: list[str] = []
+    repair_attempted = False
+    repair_successful = False
+
+    max_evidence_queries = settings.cover_letter_max_evidence_queries if settings is not None else 10
+    max_evidence_cards = settings.cover_letter_max_evidence_cards if settings is not None else 10
+    max_model_calls = settings.cover_letter_max_model_calls if settings is not None else 8
+    repair_passes = settings.cover_letter_repair_passes if settings is not None else 1
 
     def record_query(stage: str) -> None:
         nonlocal actual_queries
         actual_queries += 1
         if callable(query_callback):
             query_callback(stage)
+
+    def can_call_model() -> bool:
+        return actual_queries < max_model_calls
+
+    def maybe_record_dirty(text: str) -> None:
+        normalized = " ".join(text.split()).strip()
+        if not normalized:
+            return
+        if normalized not in dirty_evidence_rejected:
+            dirty_evidence_rejected.append(normalized[:220])
 
     evidence_cards: list[dict[str, Any]] = []
     sources = list(ALLOWED_PROFILE_EVIDENCE_FILES)
@@ -1065,15 +1193,17 @@ def generate_cover_letter_with_review(
         except Exception:
             sources = list(ALLOWED_PROFILE_EVIDENCE_FILES)
 
-        deterministic_queries = build_evidence_queries(job, fit)
-        record_query("evidence-planning-pass")
-        planned_queries = plan_cover_letter_evidence_queries(job, fit, provider)
+        deterministic_queries = build_evidence_queries(job, fit)[:max_evidence_queries]
+        planned_queries = deterministic_queries
+        if can_call_model():
+            record_query("evidence-planning-pass")
+            planned_queries = plan_cover_letter_evidence_queries(job, fit, provider, max_queries=max_evidence_queries)
         merged_queries: list[str] = []
         for query in planned_queries + deterministic_queries:
             normalized = str(query).strip()
             if normalized and normalized not in merged_queries:
                 merged_queries.append(normalized)
-        merged_queries = merged_queries[:5]
+        merged_queries = merged_queries[:max_evidence_queries]
 
         themes = [
             "C#/.NET/SQL",
@@ -1084,14 +1214,19 @@ def generate_cover_letter_with_review(
             "pull-request-based development",
         ]
         for query in merged_queries:
+            evidence_query_count_actual += 1
             try:
-                cards = search_profile_evidence(settings, query, themes, max_results=6)
+                cards = search_profile_evidence(settings, query, themes, max_results=max_evidence_cards)
             except ValueError:
                 continue
             for card in cards:
+                text = str(card.get("text") or "")
+                if is_dirty_cover_letter_text(text):
+                    maybe_record_dirty(text)
+                    continue
                 if card not in evidence_cards:
                     evidence_cards.append(card)
-            if len(evidence_cards) >= 6:
+            if len(evidence_cards) >= max_evidence_cards:
                 break
 
     letter_brief = build_cover_letter_brief(
@@ -1101,9 +1236,38 @@ def generate_cover_letter_with_review(
         documents_context,
         identity,
         letter_evidence_cards=evidence_cards,
+        max_evidence_cards=max_evidence_cards,
     )
+
+    try:
+        validate_cover_letter_brief(letter_brief)
+    except ProcessingError:
+        repaired_cards = []
+        for card in letter_brief.get("evidence_cards", []):
+            if not isinstance(card, dict):
+                continue
+            text = str(card.get("text") or "").strip()
+            if not text or is_dirty_cover_letter_text(text):
+                maybe_record_dirty(text)
+                continue
+            repaired_cards.append(card)
+        if not repaired_cards:
+            repaired_cards = [
+                {
+                    "theme": "Fallback-safe evidence",
+                    "text": "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts.",
+                    "source_file": "fallback-safe",
+                    "claim_boundary": "Do not overclaim ownership or unverified platform expertise.",
+                }
+            ]
+        letter_brief["evidence_cards"] = repaired_cards[:max_evidence_cards]
+        validate_cover_letter_brief(letter_brief, allow_generic_evidence=True)
+
     fallback_content = sanitize_generated_cover_letter(build_fallback_cover_letter(letter_brief))
-    expected_queries = 4 if review_passes else 2
+    fallback_note = None
+    if "Examples include" not in fallback_content:
+        fallback_note = "No clean evidence cards were available."
+    expected_queries = max_model_calls
     tool_access = {
         "enabled": settings is not None,
         "allowed_sources": list(ALLOWED_PROFILE_EVIDENCE_FILES),
@@ -1134,6 +1298,8 @@ def generate_cover_letter_with_review(
 
     def fallback_result(reason: str, validation_error: str | None = None) -> CoverLetterGenerationResult:
         sanitized_reason = sanitize_cover_letter_reason(reason)
+        if fallback_note:
+            sanitized_reason = f"{sanitized_reason} {fallback_note}".strip()
         validate_generated_cover_letter(fallback_content)
         return CoverLetterGenerationResult(
             content=fallback_content,
@@ -1141,14 +1307,21 @@ def generate_cover_letter_with_review(
             review_passes_enabled=review_passes,
             model_query_count_expected=expected_queries,
             model_query_count_actual=actual_queries,
+            evidence_query_count_actual=evidence_query_count_actual,
+            dirty_evidence_rejected_count=len(dirty_evidence_rejected),
             evidence_cards_used=cards_used_from_content(fallback_content, letter_brief.get("evidence_cards", []), limit=2),
+            evidence_cards_rejected_sample=[sanitize_cover_letter_reason(item) for item in dirty_evidence_rejected[:3]],
             tool_access=tool_access,
+            repair_attempted=repair_attempted,
+            repair_successful=repair_successful,
             fallback_reason=sanitized_reason,
             validation_error=validation_error,
         )
 
     try:
         if review_passes:
+            if not can_call_model():
+                return fallback_result("model call budget exhausted before draft pass")
             record_query("draft-pass")
             draft_response = provider.complete(
                 ModelRequest(
@@ -1163,6 +1336,8 @@ def generate_cover_letter_with_review(
             if not draft:
                 return fallback_result("final model output failed validation: cover letter generation returned empty draft")
 
+            if not can_call_model():
+                return fallback_result("model call budget exhausted before critique pass")
             record_query("critique-pass")
             critique_response = provider.complete(
                 ModelRequest(
@@ -1175,6 +1350,8 @@ def generate_cover_letter_with_review(
             )
             critique = critique_response.text.strip()
 
+            if not can_call_model():
+                return fallback_result("model call budget exhausted before final rewrite pass")
             record_query("final-rewrite-pass")
             final_response = provider.complete(
                 ModelRequest(
@@ -1188,6 +1365,8 @@ def generate_cover_letter_with_review(
             content = sanitize_generated_cover_letter(final_response.text)
             source = "model-final"
         else:
+            if not can_call_model():
+                return fallback_result("model call budget exhausted before single pass")
             record_query("single-pass")
             response = provider.complete(
                 ModelRequest(
@@ -1206,8 +1385,44 @@ def generate_cover_letter_with_review(
         try:
             validate_generated_cover_letter(content)
         except ProcessingError as exc:
+            validation_error_clean = sanitize_cover_letter_reason(str(exc))
+            if repair_passes > 0 and can_call_model():
+                repair_attempted = True
+                record_query("repair-pass")
+                repair_response = provider.complete(
+                    ModelRequest(
+                        system_prompt=COVER_LETTER_FINAL_SYSTEM_PROMPT,
+                        user_prompt=build_cover_letter_repair_prompt(letter_brief, content, validation_error_clean),
+                        temperature=0,
+                        max_tokens=900,
+                        response_format="text",
+                    )
+                )
+                repaired = sanitize_generated_cover_letter(repair_response.text)
+                if repaired:
+                    try:
+                        validate_generated_cover_letter(repaired)
+                        repair_successful = True
+                        return CoverLetterGenerationResult(
+                            content=repaired,
+                            source="model-repaired",
+                            review_passes_enabled=review_passes,
+                            model_query_count_expected=expected_queries,
+                            model_query_count_actual=actual_queries,
+                            evidence_query_count_actual=evidence_query_count_actual,
+                            dirty_evidence_rejected_count=len(dirty_evidence_rejected),
+                            evidence_cards_used=cards_used_from_content(repaired, letter_brief.get("evidence_cards", []), limit=2),
+                            evidence_cards_rejected_sample=[sanitize_cover_letter_reason(item) for item in dirty_evidence_rejected[:3]],
+                            tool_access=tool_access,
+                            repair_attempted=repair_attempted,
+                            repair_successful=repair_successful,
+                            fallback_reason=None,
+                            validation_error=None,
+                        )
+                    except ProcessingError:
+                        pass
             reason = f"final model output failed validation: {exc}"
-            return fallback_result(reason, validation_error=sanitize_cover_letter_reason(str(exc)))
+            return fallback_result(reason, validation_error=validation_error_clean)
 
         return CoverLetterGenerationResult(
             content=content,
@@ -1215,8 +1430,13 @@ def generate_cover_letter_with_review(
             review_passes_enabled=review_passes,
             model_query_count_expected=expected_queries,
             model_query_count_actual=actual_queries,
+            evidence_query_count_actual=evidence_query_count_actual,
+            dirty_evidence_rejected_count=len(dirty_evidence_rejected),
             evidence_cards_used=cards_used_from_content(content, letter_brief.get("evidence_cards", []), limit=2),
+            evidence_cards_rejected_sample=[sanitize_cover_letter_reason(item) for item in dirty_evidence_rejected[:3]],
             tool_access=tool_access,
+            repair_attempted=repair_attempted,
+            repair_successful=repair_successful,
             fallback_reason=None,
             validation_error=None,
         )

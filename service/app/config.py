@@ -18,6 +18,10 @@ DEFAULT_APP_DATA_DIR = "/app/data"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 DEFAULT_COVER_LETTER_REVIEW_PASSES = "true"
+DEFAULT_COVER_LETTER_MAX_EVIDENCE_QUERIES = 10
+DEFAULT_COVER_LETTER_MAX_EVIDENCE_CARDS = 10
+DEFAULT_COVER_LETTER_MAX_MODEL_CALLS = 8
+DEFAULT_COVER_LETTER_REPAIR_PASSES = 1
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -45,6 +49,16 @@ def parse_bool(name: str, value: str) -> bool:
         return False
     allowed = ", ".join(sorted(TRUE_VALUES | FALSE_VALUES))
     raise ConfigError(f"{name} must be one of: {allowed}")
+
+
+def parse_positive_int(name: str, value: str, minimum: int = 1, maximum: int = 50) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be an integer") from exc
+    if parsed < minimum or parsed > maximum:
+        raise ConfigError(f"{name} must be between {minimum} and {maximum}")
+    return parsed
 
 
 def required_text(name: str, value: str) -> str:
@@ -76,6 +90,10 @@ class Settings:
     app_api_key: str = field(repr=False)
     enable_remote_mode: bool
     cover_letter_review_passes: bool = True
+    cover_letter_max_evidence_queries: int = DEFAULT_COVER_LETTER_MAX_EVIDENCE_QUERIES
+    cover_letter_max_evidence_cards: int = DEFAULT_COVER_LETTER_MAX_EVIDENCE_CARDS
+    cover_letter_max_model_calls: int = DEFAULT_COVER_LETTER_MAX_MODEL_CALLS
+    cover_letter_repair_passes: int = DEFAULT_COVER_LETTER_REPAIR_PASSES
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -100,6 +118,30 @@ class Settings:
             "COVER_LETTER_REVIEW_PASSES",
             os.environ.get("COVER_LETTER_REVIEW_PASSES", DEFAULT_COVER_LETTER_REVIEW_PASSES),
         )
+        cover_letter_max_evidence_queries = parse_positive_int(
+            "COVER_LETTER_MAX_EVIDENCE_QUERIES",
+            os.environ.get("COVER_LETTER_MAX_EVIDENCE_QUERIES", str(DEFAULT_COVER_LETTER_MAX_EVIDENCE_QUERIES)),
+            minimum=1,
+            maximum=20,
+        )
+        cover_letter_max_evidence_cards = parse_positive_int(
+            "COVER_LETTER_MAX_EVIDENCE_CARDS",
+            os.environ.get("COVER_LETTER_MAX_EVIDENCE_CARDS", str(DEFAULT_COVER_LETTER_MAX_EVIDENCE_CARDS)),
+            minimum=1,
+            maximum=20,
+        )
+        cover_letter_max_model_calls = parse_positive_int(
+            "COVER_LETTER_MAX_MODEL_CALLS",
+            os.environ.get("COVER_LETTER_MAX_MODEL_CALLS", str(DEFAULT_COVER_LETTER_MAX_MODEL_CALLS)),
+            minimum=1,
+            maximum=20,
+        )
+        cover_letter_repair_passes = parse_positive_int(
+            "COVER_LETTER_REPAIR_PASSES",
+            os.environ.get("COVER_LETTER_REPAIR_PASSES", str(DEFAULT_COVER_LETTER_REPAIR_PASSES)),
+            minimum=0,
+            maximum=5,
+        )
 
         if enable_remote_mode and not app_api_key.strip():
             raise ConfigError("APP_API_KEY must be set when ENABLE_REMOTE_MODE is true")
@@ -113,6 +155,10 @@ class Settings:
             app_api_key=app_api_key,
             enable_remote_mode=enable_remote_mode,
             cover_letter_review_passes=cover_letter_review_passes,
+            cover_letter_max_evidence_queries=cover_letter_max_evidence_queries,
+            cover_letter_max_evidence_cards=cover_letter_max_evidence_cards,
+            cover_letter_max_model_calls=cover_letter_max_model_calls,
+            cover_letter_repair_passes=cover_letter_repair_passes,
         )
 
 
