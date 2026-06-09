@@ -24,8 +24,6 @@ DEFAULT_CANDIDATE_NAME = "Vincent Morrill"
 DEFAULT_CANDIDATE_EMAIL = "vince.codefactory@outlook.com"
 
 COVER_LETTER_BLOCKED_PHRASES = [
-    "[candidate name]",
-    "[your name]",
     "[mention",
     "minimum 2-3 years",
     "actively deepening my experience with",
@@ -125,7 +123,7 @@ def generate_cover_letter(application_id: str, settings: Settings) -> Path:
     except ModelProviderError as exc:
         raise ProcessingError(f"cover letter generation failed: {exc}") from exc
 
-    content = response.text.strip()
+    content = sanitize_generated_cover_letter(response.text)
     if not content:
         raise ProcessingError("cover letter generation returned empty content")
     validate_generated_cover_letter(content)
@@ -133,6 +131,28 @@ def generate_cover_letter(application_id: str, settings: Settings) -> Path:
     output_path = app_dir / "cover-letter.md"
     output_path.write_text(content + "\n", encoding="utf-8")
     return output_path
+
+
+def sanitize_generated_cover_letter(content: str) -> str:
+    """Strip code fences and replace known safe placeholders with real candidate details."""
+    text = content.strip()
+    text = text.replace("```markdown", "").replace("```md", "").replace("```", "")
+    # Case-insensitive replacement for name placeholders
+    for placeholder in (
+        "[Candidate Name]",
+        "[candidate name]",
+        "[Your Name]",
+        "[your name]",
+    ):
+        text = text.replace(placeholder, DEFAULT_CANDIDATE_NAME)
+    for placeholder in (
+        "[Email]",
+        "[Your Email]",
+        "[your email]",
+        "[email]",
+    ):
+        text = text.replace(placeholder, DEFAULT_CANDIDATE_EMAIL)
+    return text.strip()
 
 
 def validate_generated_cover_letter(content: str) -> None:

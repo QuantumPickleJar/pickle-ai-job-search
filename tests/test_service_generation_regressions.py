@@ -11,6 +11,7 @@ from app.services.processing import (
     ProcessingError,
     build_cover_letter_prompt,
     build_profile_context,
+    sanitize_generated_cover_letter,
     validate_generated_cover_letter,
 )
 from app.ui.views import task_table
@@ -62,9 +63,53 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
                 "I am actively deepening my experience with enterprise tooling and I do not meet Minimum 2-3 years."
             )
 
-    def test_cover_letter_validator_rejects_candidate_placeholder(self) -> None:
+    def test_sanitizer_replaces_your_name_placeholder(self) -> None:
+        result = sanitize_generated_cover_letter(
+            "Dear Hiring Manager,\n\nSincerely,\n[Your Name]"
+        )
+        self.assertIn("Vincent Morrill", result)
+        self.assertNotIn("[Your Name]", result)
+
+    def test_sanitizer_replaces_candidate_name_placeholder(self) -> None:
+        result = sanitize_generated_cover_letter(
+            "Best regards,\n[Candidate Name]"
+        )
+        self.assertIn("Vincent Morrill", result)
+        self.assertNotIn("[Candidate Name]", result)
+
+    def test_sanitizer_replaces_lowercase_variants(self) -> None:
+        result = sanitize_generated_cover_letter(
+            "[your name]\n[candidate name]\n[email]\n[your email]"
+        )
+        self.assertIn("Vincent Morrill", result)
+        self.assertIn("vince.codefactory@outlook.com", result)
+        self.assertNotIn("[", result)
+
+    def test_sanitizer_strips_code_fences(self) -> None:
+        result = sanitize_generated_cover_letter(
+            "```markdown\nDear Hiring Manager,\n\nText.\n```"
+        )
+        self.assertNotIn("```", result)
+        self.assertIn("Dear Hiring Manager", result)
+
+    def test_validator_still_rejects_i_lack(self) -> None:
         with self.assertRaises(ProcessingError):
-            validate_generated_cover_letter("Best regards,\n[Candidate Name]")
+            validate_generated_cover_letter(
+                "I lack the required senior architecture experience."
+            )
+
+    def test_validator_still_rejects_minimum_years(self) -> None:
+        with self.assertRaises(ProcessingError):
+            validate_generated_cover_letter(
+                "The role requires minimum 2-3 years of .NET experience."
+            )
+
+    def test_sanitized_content_passes_validator_when_clean(self) -> None:
+        content = "Dear Hiring Manager,\n\nI am excited to apply.\n\nSincerely,\n[Your Name]"
+        sanitized = sanitize_generated_cover_letter(content)
+        # Should not raise
+        validate_generated_cover_letter(sanitized)
+        self.assertIn("Vincent Morrill", sanitized)
 
     def test_build_profile_context_includes_enterprise_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
