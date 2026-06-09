@@ -103,20 +103,28 @@ def dashboard(
 
 
 @router.get("/ui/tasks", response_class=HTMLResponse)
-def tasks_page(settings: Settings = Depends(get_settings)) -> HTMLResponse:
+def tasks_page(request: Request, settings: Settings = Depends(get_settings)) -> HTMLResponse:
     try:
         tasks = TaskStore(settings.app_data_dir).list()
         error = ""
     except InvalidTaskDataError as exc:
         tasks, error = [], str(exc)
 
-    body = section("Processing activity", task_table(tasks))
+    deleted = request.query_params.get("deleted", "")
+    notice = ""
+    if deleted == "1":
+        notice = "Task deleted."
+    elif deleted and deleted.isdigit() and int(deleted) > 1:
+        notice = f"{deleted} tasks deleted."
+
+    body = section("Processing activity", task_table(tasks, selectable=True))
     return HTMLResponse(
         page(
             title="Tasks",
             active="dashboard",
             body=body,
             settings=settings,
+            notice=notice,
             error=error,
         )
     )
@@ -178,10 +186,15 @@ def task_detail(task_id: str, settings: Settings = Depends(get_settings)) -> HTM
     sanitized_error = escape(str(task.get("error") or "No error recorded"))
     progress = task_progress_flow(task)
     diagnostics = f'<section class="content-block"><h3>Error</h3><pre>{sanitized_error}</pre></section>'
+    delete_form = (
+        f'<form method="post" action="/ui/tasks/{escape(task_id, quote=True)}/delete" class="inline-form">'
+        '<button class="button button-secondary" type="submit">Delete task</button>'
+        '</form>'
+    )
     links_html = (
-        f'<section class="content-block"><h3>Links</h3><p>{" | ".join(links)}</p></section>'
+        f'<section class="content-block"><h3>Links</h3><p>{" | ".join(links)}</p>{delete_form}</section>'
         if links
-        else ""
+        else f'<section class="content-block"><h3>Actions</h3>{delete_form}</section>'
     )
     body = (
         '<div id="live-task-detail" data-live-fragment="1">'
@@ -196,6 +209,62 @@ def task_detail(task_id: str, settings: Settings = Depends(get_settings)) -> HTM
             settings=settings,
         )
     )
+
+
+@router.post("/ui/tasks/{task_id}/delete", response_class=HTMLResponse)
+async def delete_task_action(
+    task_id: str,
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    store = TaskStore(settings.app_data_dir)
+    try:
+        store.delete(task_id)
+    except (TaskNotFoundError, InvalidTaskDataError) as exc:
+        return HTMLResponse(
+            page(
+                title="Task unavailable",
+                active="dashboard",
+                body=empty_state(
+                    "Task deletion failed",
+                    str(exc),
+                    '<a class="button" href="/ui/tasks">Back to tasks</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=404,
+        )
+    return RedirectResponse("/ui/tasks?deleted=1", status_code=303)
+
+
+@router.post("/ui/tasks/delete", response_class=HTMLResponse)
+async def bulk_delete_tasks_action(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    body = (await request.body()).decode("utf-8")
+    parsed = parse_qs(body, keep_blank_values=True, strict_parsing=False)
+    task_ids = [item for item in parsed.get("task_ids", []) if item]
+    if not task_ids:
+        return RedirectResponse("/ui/tasks?deleted=0", status_code=303)
+
+    store = TaskStore(settings.app_data_dir)
+    try:
+        store.delete_many(task_ids)
+    except (TaskNotFoundError, InvalidTaskDataError) as exc:
+        return HTMLResponse(
+            page(
+                title="Task deletion failed",
+                active="dashboard",
+                body=empty_state(
+                    "Bulk task deletion failed",
+                    str(exc),
+                    '<a class="button" href="/ui/tasks">Back to tasks</a>',
+                ),
+                settings=settings,
+            ),
+            status_code=404,
+        )
+    return RedirectResponse(f"/ui/tasks?deleted={len(task_ids)}", status_code=303)
 
 
 @router.get("/ui/jobs/new", response_class=HTMLResponse)

@@ -82,6 +82,25 @@ class TaskStore:
         tasks.sort(key=lambda task: str(task["created_at"]), reverse=True)
         return tasks
 
+    def delete(self, task_id: str) -> None:
+        if not is_task_id(task_id):
+            raise TaskNotFoundError(f"task not found: {task_id}")
+        path = self.tasks_dir / f"{task_id}.json"
+        with self._lock:
+            if path.is_symlink() or not path.is_file():
+                raise TaskNotFoundError(f"task not found: {task_id}")
+            try:
+                path.unlink()
+            except OSError as exc:
+                raise TaskStoreError(f"cannot delete task: {task_id}") from exc
+
+    def delete_many(self, task_ids: list[str]) -> int:
+        deleted = 0
+        for task_id in task_ids:
+            self.delete(task_id)
+            deleted += 1
+        return deleted
+
     def transition(
         self,
         task_id: str,

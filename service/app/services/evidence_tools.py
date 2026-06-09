@@ -437,17 +437,57 @@ def _quality_bonus(snippet: str, source_file: str) -> int:
     return bonus
 
 
+def _sanitize_claim_boundary_line(line: str) -> str:
+    text = re.sub(r"[*_`]+", "", str(line).strip(" -\t")).strip()
+    if not text or text.startswith("#"):
+        return ""
+
+    lowered = text.casefold()
+    if lowered.startswith("use instead:"):
+        return ""
+    if lowered.startswith("do not claim the candidate lacks enterprise application experience"):
+        return ""
+
+    if lowered.startswith("do not claim "):
+        claim = text[len("Do not claim ") :].rstrip(".")
+        claim = re.sub(r"\s+unless verified$", "", claim, flags=re.IGNORECASE)
+        claim = re.sub(r"\s+not explicitly listed$", " not explicitly listed", claim, flags=re.IGNORECASE)
+        return f"Avoid claiming {claim}."
+
+    if "may be described only at the level supported by actual use" in lowered:
+        subject = text.split(" may be described", 1)[0].strip()
+        return f"Keep {subject} references conservative and limited to direct hands-on use."
+
+    if "should be described as exposure unless verified as hands-on ownership" in lowered:
+        subject = text.split(" should be described", 1)[0].strip()
+        return f"Frame {subject} as exposure rather than ownership."
+
+    if "should be described as familiarity unless project evidence supports more" in lowered:
+        subject = text.split(" should be described", 1)[0].strip()
+        return f"Frame {subject} as familiarity rather than ownership."
+
+    if "claims require explicit evidence before use" in lowered:
+        subject = text.split(" claims require", 1)[0].strip()
+        return f"Avoid making {subject} ownership claims without direct evidence."
+
+    return text
+
+
 def _claim_boundary_for_snippet(disallowed_text: str, snippet: str, theme: str) -> str:
     boundary_default = "Do not overclaim ownership, senior architecture authority, cloud ownership, certifications, or unverified platform expertise."
     lowered_snippet = snippet.casefold()
     lowered_theme = theme.casefold()
-    lines = [line.strip(" -\t") for line in disallowed_text.splitlines() if line.strip()]
+    lines = [line.strip() for line in disallowed_text.splitlines() if line.strip()]
     matches: list[str] = []
     for line in lines:
+        if line.startswith("#"):
+            continue
         lowered_line = line.casefold()
         tokens = re.findall(r"[a-zA-Z0-9#.+-]+", lowered_line)
         if any(token in lowered_snippet or token in lowered_theme for token in tokens[:8] if len(token) > 3):
-            matches.append(line)
+            sanitized = _sanitize_claim_boundary_line(line)
+            if sanitized and sanitized not in matches:
+                matches.append(sanitized)
         if len(matches) >= 2:
             break
     if not matches:
