@@ -16,14 +16,17 @@ from ai_job_search.model_provider import ModelProviderError
 from ai_job_search.providers import OllamaProvider
 
 from app.config import Settings
+from app.services.evidence_tools import APPLICANT_FACING_EVIDENCE_FILES
 from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
 from app.services.evidence_tools import CoverLetterQualityIssue
+from app.services.evidence_tools import REFERENCE_CONTEXT_FILES
 from app.services.evidence_tools import build_evidence_queries
 from app.services.evidence_tools import is_dirty_cover_letter_text
+from app.services.evidence_tools import list_existing_profile_evidence_sources
 from app.services.evidence_tools import list_profile_evidence_sources
 from app.services.evidence_tools import lint_cover_letter_text
 from app.services.evidence_tools import plan_cover_letter_evidence_queries
-from app.services.evidence_tools import search_profile_evidence
+from app.services.evidence_tools import search_applicant_facing_evidence
 from app.services.job_store import is_safe_identifier
 
 
@@ -45,6 +48,9 @@ class CoverLetterGenerationResult:
     dirty_evidence_rejected_count: int
     evidence_cards_used: list[dict[str, str]]
     evidence_cards_rejected_sample: list[str]
+    evidence_mode: str
+    applicant_facing_evidence_sources: list[str]
+    reference_context_sources: list[str]
     tool_access: dict[str, Any]
     repair_attempted: bool = False
     repair_successful: bool = False
@@ -54,6 +60,9 @@ class CoverLetterGenerationResult:
 
 DEFAULT_CANDIDATE_NAME = "Vincent Morrill"
 DEFAULT_CANDIDATE_EMAIL = "vince.codefactory@outlook.com"
+GENERIC_SAFE_EVIDENCE_SENTENCE = (
+    "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts."
+)
 
 COVER_LETTER_BLOCKED_PHRASES = [
     "[candidate",
@@ -93,6 +102,15 @@ COVER_LETTER_BLOCKED_PHRASES = [
     "unless verified",
     "claims to avoid",
     "do not claim",
+    "only use verified facts",
+    "treat this file",
+    "safe source",
+    "safe themes",
+    "verify",
+    "expand",
+    "where verified",
+    "claim boundary",
+    "manual review",
     "sql or relational database work",
     "c#, .net, asp.net, or .net core work",
     "and sql and",
@@ -227,6 +245,9 @@ def generate_cover_letter(
     output_path.write_text(result.content + "\n", encoding="utf-8")
     meta = {
         "source": result.source,
+        "evidence_mode": result.evidence_mode,
+        "applicant_facing_evidence_sources": result.applicant_facing_evidence_sources,
+        "reference_context_sources": result.reference_context_sources,
         "review_passes_enabled": result.review_passes_enabled,
         "model_query_count_expected": result.model_query_count_expected,
         "model_query_count_actual": result.model_query_count_actual,
@@ -334,6 +355,30 @@ def validate_generated_cover_letter(content: str) -> None:
             )
     if any(fragment in lowered for fragment in ("project template", "known technical areas", "manual review notes", "candidate project leads")):
         raise ProcessingError("cover letter generation returned unsafe output. Choppy scaffold fragment detected.")
+    root_level_scaffold_markers = (
+        "only use verified facts",
+        "treat this file",
+        "safe source",
+        "safe themes",
+        "verify",
+        "expand",
+        "todo",
+        "placeholder",
+        "where supported",
+        "where verified",
+        "claim boundary",
+        "claims to avoid",
+        "do not claim",
+        "manual review",
+        "project template",
+        "relevant coursework",
+    )
+    for marker in root_level_scaffold_markers:
+        if marker in lowered:
+            raise ProcessingError(
+                "cover letter generation returned unsafe output. "
+                f"Instructional/scaffold source text detected: {marker}"
+            )
     word_count = len(re.findall(r"\b\w+\b", content))
     if word_count < 180 or word_count > 500:
         raise ProcessingError("cover letter generation returned unsafe output. Word count outside acceptable range.")
@@ -985,34 +1030,15 @@ def build_cover_letter_brief(
         if isinstance(item, dict)
         and str(item.get("text") or "").strip()
         and not is_dirty_cover_letter_text(str(item.get("text") or ""))
+        and str(item.get("source_file") or "").strip() in APPLICANT_FACING_EVIDENCE_FILES
     ][:max_cards]
-
-    if not evidence_cards:
-        fallback_bullets = build_cover_letter_evidence(
-            profile_context,
-            {
-                "matched_skills": matched_skills,
-                "safe_resume_keywords": safe_keywords,
-                "safe_enterprise_themes": enterprise_themes,
-            },
-        )
-        evidence_cards = [
-            {
-                "theme": "Profile evidence",
-                "text": bullet,
-                "source_file": "profile_context",
-                "claim_boundary": "Do not overclaim ownership or unverified platform expertise.",
-            }
-            for bullet in fallback_bullets[:max_cards]
-            if not is_dirty_cover_letter_text(bullet)
-        ]
 
     if not evidence_cards:
         evidence_cards = [
             {
                 "theme": "Fallback-safe evidence",
-                "text": "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts.",
-                "source_file": "fallback-safe",
+                "text": GENERIC_SAFE_EVIDENCE_SENTENCE,
+                "source_file": "generic-safe-fallback",
                 "claim_boundary": "Do not overclaim ownership or unverified platform expertise.",
             }
         ]
@@ -1195,47 +1221,6 @@ def validate_cover_letter_brief(
         fail(f"{prefix}: no clean evidence cards", field_path="evidence_cards", rule="no_clean_evidence_cards")
 
 
-def build_cover_letter_evidence(profile_context: str, letter_brief: dict[str, Any]) -> list[str]:
-    text = profile_context.casefold()
-    evidence: list[str] = []
-
-    def add_once(item: str) -> None:
-        if item not in evidence:
-            evidence.append(item)
-
-    if "bizlink" in text:
-        add_once(
-            "Contributed feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow."
-        )
-    if any(token in text for token in ("uwo", "portal", "rostar", "university it")):
-        add_once(
-            "Contributed to internal university IT applications with backend and application development, debugging, and documentation work."
-        )
-    if any(token in text for token in ("applied benefits", "applied systems", "benefits", "insurance software")):
-        add_once(
-            "Worked on benefits and insurance software involving business workflows, automation, testing, and pull-request-based development."
-        )
-    if any(token in text for token in ("c#", ".net", "sql", "angular", "typescript")):
-        add_once(
-            "Built and maintained application features using C#, .NET, and SQL with practical collaboration in code review and testing workflows."
-        )
-    if any(token in text for token in ("unit test", "unit-tested", "testing")):
-        add_once(
-            "Implemented and refined unit-tested feature work to improve behavior reliability and maintainability in production-facing workflows."
-        )
-
-    if not evidence:
-        skills = [str(item).strip() for item in letter_brief.get("matched_skills", []) if str(item).strip()]
-        top_skills = skills[:3]
-        if top_skills:
-            skill_line = ", ".join(top_skills)
-            add_once(f"Contributed feature work and testing-focused improvements in application development contexts using {skill_line}.")
-        else:
-            add_once("Contributed feature work, debugging support, and testing-focused improvements in internal application workflows.")
-
-    return evidence[:6]
-
-
 def build_cover_letter_critique_prompt(letter_brief: dict[str, Any], draft: str) -> str:
     brief_json = json.dumps(letter_brief, ensure_ascii=False, indent=2)
     return f"""Evaluate this draft against the rubric and provide concise revision bullets.
@@ -1344,7 +1329,9 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     evidence_texts = [
         str(item.get("text") or "").strip()
         for item in evidence_cards
-        if str(item.get("text") or "").strip() and not is_dirty_cover_letter_text(str(item.get("text") or ""))
+        if str(item.get("text") or "").strip()
+        and str(item.get("source_file") or "") == "cover_letter_evidence.md"
+        and not is_dirty_cover_letter_text(str(item.get("text") or ""))
     ]
     polished_evidence = [polish_evidence_for_cover_letter(item) for item in evidence_texts]
     polished_evidence = [
@@ -1354,9 +1341,9 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     ]
 
     if polished_evidence:
-        evidence_clause = f"Examples include {polished_evidence[0]}, giving me a practical foundation for supporting software used in real operational workflows."
+        evidence_clause = f"One example is {polished_evidence[0]}, which gives me a practical foundation for supporting software used in real operational workflows."
     else:
-        evidence_clause = "This hands-on work has given me a practical foundation for supporting software used in real operational workflows."
+        evidence_clause = "This hands-on development work gives me a practical foundation for supporting software used in real operational workflows."
 
     letter = (
         "Dear Hiring Manager,\n\n"
@@ -1394,6 +1381,9 @@ def generate_cover_letter_with_review(
     max_evidence_cards = settings.cover_letter_max_evidence_cards if settings is not None else 10
     max_model_calls = settings.cover_letter_max_model_calls if settings is not None else 8
     repair_passes = settings.cover_letter_repair_passes if settings is not None else 1
+    evidence_mode = "generic_safe_fallback"
+    applicant_facing_evidence_sources: list[str] = []
+    reference_context_sources = list(REFERENCE_CONTEXT_FILES)
 
     def record_query(stage: str) -> None:
         nonlocal actual_queries
@@ -1412,54 +1402,56 @@ def generate_cover_letter_with_review(
             dirty_evidence_rejected.append(normalized[:220])
 
     evidence_cards: list[dict[str, Any]] = []
-    sources = list(ALLOWED_PROFILE_EVIDENCE_FILES)
     if settings is not None:
         try:
-            source_inventory = list_profile_evidence_sources(settings)
-            available_sources = [
-                str(item.get("source_file") or "")
-                for item in source_inventory
-                if isinstance(item, dict) and item.get("exists")
-            ]
-            sources = [src for src in sources if src in set(available_sources)] or list(ALLOWED_PROFILE_EVIDENCE_FILES)
+            applicant_facing_evidence_sources = list_existing_profile_evidence_sources(
+                settings,
+                APPLICANT_FACING_EVIDENCE_FILES,
+            )
         except Exception:
-            sources = list(ALLOWED_PROFILE_EVIDENCE_FILES)
+            applicant_facing_evidence_sources = []
 
-        deterministic_queries = build_evidence_queries(job, fit)[:max_evidence_queries]
-        planned_queries = deterministic_queries
-        if can_call_model():
-            record_query("evidence-planning-pass")
-            planned_queries = plan_cover_letter_evidence_queries(job, fit, provider, max_queries=max_evidence_queries)
-        merged_queries: list[str] = []
-        for query in planned_queries + deterministic_queries:
-            normalized = str(query).strip()
-            if normalized and normalized not in merged_queries:
-                merged_queries.append(normalized)
-        merged_queries = merged_queries[:max_evidence_queries]
+        if applicant_facing_evidence_sources:
+            deterministic_queries = build_evidence_queries(job, fit)[:max_evidence_queries]
+            planned_queries = deterministic_queries
+            if can_call_model():
+                record_query("evidence-planning-pass")
+                planned_queries = plan_cover_letter_evidence_queries(job, fit, provider, max_queries=max_evidence_queries)
+            merged_queries: list[str] = []
+            for query in planned_queries + deterministic_queries:
+                normalized = str(query).strip()
+                if normalized and normalized not in merged_queries:
+                    merged_queries.append(normalized)
+            merged_queries = merged_queries[:max_evidence_queries]
 
-        themes = [
-            "C#/.NET/SQL",
-            "enterprise application development",
-            "internal applications",
-            "insurance and benefits workflows",
-            "unit-tested feature work",
-            "pull-request-based development",
-        ]
-        for query in merged_queries:
-            evidence_query_count_actual += 1
-            try:
-                cards = search_profile_evidence(settings, query, themes, max_results=max_evidence_cards)
-            except ValueError:
-                continue
-            for card in cards:
-                text = str(card.get("text") or "")
-                if is_dirty_cover_letter_text(text):
-                    maybe_record_dirty(text)
+            themes = [
+                "C#/.NET/SQL",
+                "enterprise application development",
+                "internal applications",
+                "insurance and benefits workflows",
+                "unit-tested feature work",
+                "pull-request-based development",
+            ]
+            for query in merged_queries:
+                evidence_query_count_actual += 1
+                try:
+                    cards = search_applicant_facing_evidence(settings, query, themes, max_results=max_evidence_cards)
+                except ValueError:
                     continue
-                if card not in evidence_cards:
-                    evidence_cards.append(card)
-            if len(evidence_cards) >= max_evidence_cards:
-                break
+                for card in cards:
+                    text = str(card.get("text") or "")
+                    if is_dirty_cover_letter_text(text):
+                        maybe_record_dirty(text)
+                        continue
+                    if card not in evidence_cards:
+                        evidence_cards.append(card)
+                if len(evidence_cards) >= max_evidence_cards:
+                    break
+
+    evidence_cards = [
+        card for card in evidence_cards if str(card.get("source_file") or "") in APPLICANT_FACING_EVIDENCE_FILES
+    ]
+    evidence_mode = "curated_only" if evidence_cards and all(str(card.get("source_file") or "") == "cover_letter_evidence.md" for card in evidence_cards) else "generic_safe_fallback"
 
     letter_brief = build_cover_letter_brief(
         job,
@@ -1482,27 +1474,30 @@ def generate_cover_letter_with_review(
             if not text or is_dirty_cover_letter_text(text):
                 maybe_record_dirty(text)
                 continue
+            if str(card.get("source_file") or "") not in APPLICANT_FACING_EVIDENCE_FILES:
+                continue
             repaired_cards.append(card)
         if not repaired_cards:
             repaired_cards = [
                 {
                     "theme": "Fallback-safe evidence",
-                    "text": "Contributed feature work, testing-focused improvements, and workflow refinements in internal and enterprise-grade application contexts.",
-                    "source_file": "fallback-safe",
+                    "text": GENERIC_SAFE_EVIDENCE_SENTENCE,
+                    "source_file": "generic-safe-fallback",
                     "claim_boundary": "Do not overclaim ownership or unverified platform expertise.",
                 }
             ]
+            evidence_mode = "generic_safe_fallback"
         letter_brief["evidence_cards"] = repaired_cards[:max_evidence_cards]
         validate_cover_letter_brief(letter_brief, allow_generic_evidence=True, app_dir=app_dir)
 
     fallback_content = sanitize_generated_cover_letter(build_fallback_cover_letter(letter_brief))
     fallback_note = None
-    if "Examples include" not in fallback_content:
+    if "One example is" not in fallback_content:
         fallback_note = "No clean evidence cards were available."
     expected_queries = max_model_calls
     tool_access = {
         "enabled": settings is not None,
-        "allowed_sources": list(ALLOWED_PROFILE_EVIDENCE_FILES),
+        "allowed_sources": list(APPLICANT_FACING_EVIDENCE_FILES),
     }
 
     def cards_used_from_content(content: str, cards: list[dict[str, Any]], limit: int = 2) -> list[dict[str, str]]:
@@ -1543,6 +1538,9 @@ def generate_cover_letter_with_review(
             dirty_evidence_rejected_count=len(dirty_evidence_rejected),
             evidence_cards_used=cards_used_from_content(fallback_content, letter_brief.get("evidence_cards", []), limit=2),
             evidence_cards_rejected_sample=[sanitize_cover_letter_reason(item) for item in dirty_evidence_rejected[:3]],
+            evidence_mode=evidence_mode,
+            applicant_facing_evidence_sources=applicant_facing_evidence_sources,
+            reference_context_sources=reference_context_sources,
             tool_access=tool_access,
             repair_attempted=repair_attempted,
             repair_successful=repair_successful,
@@ -1649,6 +1647,9 @@ def generate_cover_letter_with_review(
                             dirty_evidence_rejected_count=len(dirty_evidence_rejected),
                             evidence_cards_used=cards_used_from_content(repaired, letter_brief.get("evidence_cards", []), limit=2),
                             evidence_cards_rejected_sample=[sanitize_cover_letter_reason(item) for item in dirty_evidence_rejected[:3]],
+                            evidence_mode=evidence_mode,
+                            applicant_facing_evidence_sources=applicant_facing_evidence_sources,
+                            reference_context_sources=reference_context_sources,
                             tool_access=tool_access,
                             repair_attempted=repair_attempted,
                             repair_successful=repair_successful,
@@ -1671,6 +1672,9 @@ def generate_cover_letter_with_review(
             dirty_evidence_rejected_count=len(dirty_evidence_rejected),
             evidence_cards_used=cards_used_from_content(content, letter_brief.get("evidence_cards", []), limit=2),
             evidence_cards_rejected_sample=[sanitize_cover_letter_reason(item) for item in dirty_evidence_rejected[:3]],
+            evidence_mode=evidence_mode,
+            applicant_facing_evidence_sources=applicant_facing_evidence_sources,
+            reference_context_sources=reference_context_sources,
             tool_access=tool_access,
             repair_attempted=repair_attempted,
             repair_successful=repair_successful,

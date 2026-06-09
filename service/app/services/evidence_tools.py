@@ -15,8 +15,11 @@ from ai_job_search.model_provider import ModelProviderError
 from app.config import Settings
 
 
-ALLOWED_PROFILE_EVIDENCE_FILES = (
+APPLICANT_FACING_EVIDENCE_FILES = (
     "cover_letter_evidence.md",
+)
+
+REFERENCE_CONTEXT_FILES = (
     "resume_facts.md",
     "project_inventory.md",
     "experience_bullets.md",
@@ -26,6 +29,8 @@ ALLOWED_PROFILE_EVIDENCE_FILES = (
     "disallowed_claims.md",
     "generation-constraints.md",
 )
+
+ALLOWED_PROFILE_EVIDENCE_FILES = APPLICANT_FACING_EVIDENCE_FILES + REFERENCE_CONTEXT_FILES
 
 BOUNDARY_ONLY_FILES = {"disallowed_claims.md", "generation-constraints.md"}
 
@@ -242,6 +247,18 @@ def list_profile_evidence_sources(settings: Settings) -> list[dict[str, Any]]:
             }
         )
     return sources
+
+
+def list_existing_profile_evidence_sources(settings: Settings, source_files: tuple[str, ...]) -> list[str]:
+    existing: list[str] = []
+    for filename in source_files:
+        path = _profile_dir(settings) / filename
+        try:
+            if path.is_file() and path.read_text(encoding="utf-8").strip():
+                existing.append(filename)
+        except OSError:
+            continue
+    return existing
 
 
 def _split_snippets(text: str) -> list[str]:
@@ -522,6 +539,7 @@ def search_profile_evidence(
     query: str,
     themes: list[str],
     max_results: int = 6,
+    source_files: tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     if _is_unsafe_query(query):
         raise ValueError("unsafe evidence query")
@@ -532,7 +550,8 @@ def search_profile_evidence(
     disallowed_text = _read_allowlisted_file(settings, "disallowed_claims.md")
 
     corpus: list[tuple[str, str]] = []
-    for filename in ALLOWED_PROFILE_EVIDENCE_FILES:
+    candidate_files = source_files or ALLOWED_PROFILE_EVIDENCE_FILES
+    for filename in candidate_files:
         if filename in BOUNDARY_ONLY_FILES:
             continue
         content = _read_allowlisted_file(settings, filename)
@@ -581,6 +600,21 @@ def search_profile_evidence(
     for item in trimmed:
         item.pop("_score", None)
     return trimmed
+
+
+def search_applicant_facing_evidence(
+    settings: Settings,
+    query: str,
+    themes: list[str],
+    max_results: int = 6,
+) -> list[dict[str, Any]]:
+    return search_profile_evidence(
+        settings,
+        query,
+        themes,
+        max_results=max_results,
+        source_files=APPLICANT_FACING_EVIDENCE_FILES,
+    )
 
 
 def build_evidence_queries(job: dict[str, Any], fit: dict[str, Any]) -> list[str]:

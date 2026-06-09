@@ -8,10 +8,12 @@ sys.path.insert(0, str(REPO_ROOT / "service"))
 
 from app.config import Settings
 from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
+from app.services.evidence_tools import APPLICANT_FACING_EVIDENCE_FILES
 from app.services.evidence_tools import build_evidence_queries
 from app.services.evidence_tools import is_dirty_cover_letter_text
 from app.services.evidence_tools import is_applicant_facing_evidence
 from app.services.evidence_tools import list_profile_evidence_sources
+from app.services.evidence_tools import search_applicant_facing_evidence
 from app.services.evidence_tools import search_profile_evidence
 
 
@@ -77,6 +79,37 @@ class CoverLetterEvidenceToolTests(unittest.TestCase):
             self.assertEqual(cards[0]["source_file"], "cover_letter_evidence.md")
             self.assertIn("source_file", cards[0])
             self.assertLessEqual(len(cards[0]["text"]), 300)
+
+    def test_applicant_facing_search_uses_only_curated_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            profile = root / "profile"
+            profile.mkdir(parents=True, exist_ok=True)
+            (profile / "cover_letter_evidence.md").write_text(
+                "- Contributed feature work and unit-tested business-rule changes in BizLink.",
+                encoding="utf-8",
+            )
+            (profile / "resume_facts.md").write_text(
+                "- Only use verified facts here. Treat this file as the safe source for application materials.",
+                encoding="utf-8",
+            )
+            (profile / "project_inventory.md").write_text(
+                "## Project Template\n- Context:\n- Purpose:\n",
+                encoding="utf-8",
+            )
+
+            cards = search_applicant_facing_evidence(
+                self.make_settings(root),
+                "BizLink verified facts evidence",
+                ["Enterprise workflow"],
+                max_results=5,
+            )
+
+            self.assertGreaterEqual(len(cards), 1)
+            self.assertTrue(all(card["source_file"] in APPLICANT_FACING_EVIDENCE_FILES for card in cards))
+            joined = " ".join(card["text"] for card in cards)
+            self.assertNotIn("Only use verified facts here", joined)
+            self.assertNotIn("Treat this file", joined)
 
     def test_scaffold_snippets_are_filtered(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
