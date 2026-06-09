@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +89,8 @@ DIRTY_EVIDENCE_MARKERS = (
     "tbd",
     "fixme",
     "relevant coursework or projects",
+    "placeholder:",
+    "placeholder",
     "add verified",
     "project template",
     "known technical areas",
@@ -96,6 +99,9 @@ DIRTY_EVIDENCE_MARKERS = (
     "missing details",
     "technical skills to verify",
     "where supported by actual projects",
+    "where verified",
+    "where verified by project history",
+    "project history",
     "safe themes to verify",
     "verify and expand",
     "unless verified",
@@ -143,6 +149,26 @@ SKILL_LIST_TOKENS = (
     "azure",
     "cloud",
 )
+
+LINT_TECH_SKILL_TOKENS = (
+    "c#",
+    ".net",
+    "asp.net",
+    ".net core",
+    "entity framework",
+    "sql",
+    "azure",
+    "power platform",
+    "microsoft 365",
+    "iam",
+)
+
+
+@dataclass(frozen=True)
+class CoverLetterQualityIssue:
+    rule: str
+    message: str
+    sentence: str
 
 
 def _profile_dir(settings: Settings) -> Path:
@@ -241,6 +267,96 @@ def _clip_text(text: str, limit: int = 300) -> str:
     return clean[: limit - 3].rstrip() + "..."
 
 
+def split_cover_letter_sentences(text: str) -> list[str]:
+    normalized = " ".join(str(text).split())
+    if not normalized:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", normalized)
+    sentences = [part.strip() for part in parts if part.strip()]
+    return sentences or [normalized]
+
+
+def lint_cover_letter_sentence(sentence: str) -> list[CoverLetterQualityIssue]:
+    text = " ".join(str(sentence).split()).strip()
+    if not text:
+        return []
+    lowered = text.casefold()
+    issues: list[CoverLetterQualityIssue] = []
+
+    def add(rule: str, message: str) -> None:
+        issues.append(CoverLetterQualityIssue(rule=rule, message=message, sentence=text))
+
+    banned_markers = (
+        "todo",
+        "tbd",
+        "fixme",
+        "placeholder:",
+        "placeholder",
+        "where verified",
+        "where verified by project history",
+        "where supported",
+        "where supported by actual projects",
+        "unless verified",
+        "safe claims",
+        "claims to avoid",
+        "do not claim",
+        "manual review notes",
+        "relevant coursework or projects",
+        "add verified",
+        "project template",
+        "known technical areas",
+        "candidate project leads",
+        "missing details",
+        "technical skills to verify",
+    )
+    if any(marker in lowered for marker in banned_markers):
+        add("verification_scaffold", "Sentence includes scaffold/verification language")
+
+    if re.search(r":\s*todo\b", lowered):
+        add("todo_placeholder", "Sentence includes TODO placeholder")
+
+    starts_with_blocks = (
+        "examples include placeholder",
+        "examples include relevant",
+        "examples include context:",
+        "examples include purpose:",
+        "examples include role:",
+        "examples include technologies:",
+        "sql or",
+        "c#, .net",
+    )
+    if any(lowered.startswith(prefix) for prefix in starts_with_blocks):
+        add("choppy_scaffold_fragment", "Sentence starts with a scaffold fragment")
+
+    if ". sql or" in lowered or "and sql and" in lowered:
+        add("grammar_fragment", "Sentence contains a broken grammar fragment")
+
+    if " or " in lowered:
+        tech_hits = sum(1 for token in LINT_TECH_SKILL_TOKENS if token in lowered)
+        has_verification = any(token in lowered for token in ("where verified", "where supported", "project history", "actual projects"))
+        if tech_hits >= 2 and has_verification:
+            add("skill_list_verification_pattern", "Sentence mixes skill-list disjunction with verification scaffold")
+
+    meta_markers = (
+        "provided letter brief",
+        "based on the provided",
+        "as a language model",
+        "this cover letter",
+        "the candidate should",
+    )
+    if any(marker in lowered for marker in meta_markers):
+        add("meta_instruction", "Sentence contains meta/instruction language")
+
+    return issues
+
+
+def lint_cover_letter_text(text: str) -> list[CoverLetterQualityIssue]:
+    issues: list[CoverLetterQualityIssue] = []
+    for sentence in split_cover_letter_sentences(text):
+        issues.extend(lint_cover_letter_sentence(sentence))
+    return issues
+
+
 def is_dirty_cover_letter_text(text: str) -> bool:
     normalized = " ".join(str(text).split()).strip()
     if not normalized:
@@ -248,6 +364,8 @@ def is_dirty_cover_letter_text(text: str) -> bool:
 
     lowered = normalized.casefold()
     if any(marker in lowered for marker in DIRTY_EVIDENCE_MARKERS):
+        return True
+    if lint_cover_letter_text(normalized):
         return True
     if re.search(r":\s*todo\b", lowered):
         return True
@@ -275,6 +393,8 @@ def is_applicant_facing_evidence(text: str) -> bool:
     if not lowered:
         return False
     if any(marker in lowered for marker in SCAFFOLD_PHRASE_MARKERS):
+        return False
+    if lint_cover_letter_text(raw):
         return False
 
     accomplishment_present = any(marker in lowered for marker in ACCOMPLISHMENT_MARKERS)

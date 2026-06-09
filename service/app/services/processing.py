@@ -20,6 +20,7 @@ from app.services.evidence_tools import ALLOWED_PROFILE_EVIDENCE_FILES
 from app.services.evidence_tools import build_evidence_queries
 from app.services.evidence_tools import is_dirty_cover_letter_text
 from app.services.evidence_tools import list_profile_evidence_sources
+from app.services.evidence_tools import lint_cover_letter_text
 from app.services.evidence_tools import plan_cover_letter_evidence_queries
 from app.services.evidence_tools import search_profile_evidence
 from app.services.job_store import is_safe_identifier
@@ -270,6 +271,14 @@ def sanitize_generated_cover_letter(content: str) -> str:
 
 def validate_generated_cover_letter(content: str) -> None:
     lowered = content.lower()
+    issues = lint_cover_letter_text(content)
+    if issues:
+        issue = issues[0]
+        sentence = " ".join(issue.sentence.split())[:220]
+        raise ProcessingError(
+            "cover letter generation returned unsafe output. "
+            f"Sentence rule {issue.rule} failed: \"{sentence}\""
+        )
     if is_dirty_cover_letter_text(content):
         raise ProcessingError("cover letter generation returned unsafe output. Dirty scaffold/template text detected.")
     for phrase in COVER_LETTER_BLOCKED_PHRASES:
@@ -332,6 +341,8 @@ def polish_evidence_for_cover_letter(evidence_text: str) -> str:
 
     if is_dirty_cover_letter_text(raw):
         return ""
+    if lint_cover_letter_text(raw):
+        return ""
 
     lowered = raw.casefold()
     blocked = (
@@ -353,6 +364,12 @@ def polish_evidence_for_cover_letter(evidence_text: str) -> str:
         return ""
     if re.search(r"\bor\b.+where supported by actual projects", lowered):
         return ""
+    if "placeholder:" in lowered or "where verified" in lowered:
+        return ""
+    if " or " in lowered:
+        tech_hits = sum(1 for token in ("c#", ".net", "asp.net", ".net core", "entity framework", "sql") if token in lowered)
+        if tech_hits >= 2 and any(token in lowered for token in ("where verified", "where supported", "project history")):
+            return ""
     if re.fullmatch(r"[a-z ]{2,35}:", lowered):
         return ""
     if any(
@@ -388,6 +405,8 @@ def is_safe_cover_letter_evidence_fragment(text: str) -> bool:
     if not normalized:
         return False
     if is_dirty_cover_letter_text(normalized):
+        return False
+    if lint_cover_letter_text(normalized):
         return False
     lowered = normalized.casefold()
     blocked = (
@@ -957,6 +976,8 @@ def validate_cover_letter_brief(letter_brief: dict[str, Any], allow_generic_evid
     serialized = json.dumps(letter_brief, ensure_ascii=False).casefold()
     if "minimum 2-3 years" in serialized or "todo" in serialized:
         raise ProcessingError("cover letter brief invalid: contains internal requirement or TODO text")
+    if lint_cover_letter_text(serialized):
+        raise ProcessingError("cover letter brief invalid: contains sentence-level scaffold/template issues")
 
     for item in letter_brief.get("matched_skills", []):
         value = str(item).strip()
@@ -968,7 +989,12 @@ def validate_cover_letter_brief(letter_brief: dict[str, Any], allow_generic_evid
             raise ProcessingError("cover letter brief invalid: contains unsafe keyword")
 
     cards = [card for card in letter_brief.get("evidence_cards", []) if isinstance(card, dict)]
-    clean_cards = [card for card in cards if not is_dirty_cover_letter_text(str(card.get("text") or ""))]
+    clean_cards = [
+        card
+        for card in cards
+        if not is_dirty_cover_letter_text(str(card.get("text") or ""))
+        and not lint_cover_letter_text(str(card.get("text") or ""))
+    ]
     if not clean_cards and not allow_generic_evidence:
         raise ProcessingError("cover letter brief invalid: no clean evidence cards")
 
@@ -1078,22 +1104,26 @@ Critique:
 
 
 def build_cover_letter_repair_prompt(
-        letter_brief: dict[str, Any],
-        unsafe_output: str,
-        validation_error: str,
+    letter_brief: dict[str, Any],
+    unsafe_output: str,
+    validation_error: str,
 ) -> str:
-        brief_json = json.dumps(letter_brief, ensure_ascii=False, indent=2)
-        return f"""Rewrite this cover letter so it is safe and submission-ready.
+    brief_json = json.dumps(letter_brief, ensure_ascii=False, indent=2)
+    return f"""Rewrite this cover letter so it is safe and submission-ready.
 
 Rules:
 - Return only the corrected cover letter.
+- The previous output failed because of this exact sentence-level issue.
 - Start with: Dear Hiring Manager,
 - End with:
     Best regards,
 
     Vincent Morrill
-- Remove all scaffold, TODO, template, and instruction text.
+- Remove or rewrite the offending sentence.
+- Remove all scaffold, TODO, template, verification, and claim-boundary language.
 - Use only factual content from the Letter Brief evidence_cards.
+- Do not use phrases like where verified, where supported, Placeholder, TODO, or or ... where verified.
+- If a technology is not safe to claim, omit it rather than writing verification language.
 - Keep the letter factual, concise, and sendable.
 
 Letter Brief JSON:
@@ -1121,7 +1151,11 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
         if str(item.get("text") or "").strip() and not is_dirty_cover_letter_text(str(item.get("text") or ""))
     ]
     polished_evidence = [polish_evidence_for_cover_letter(item) for item in evidence_texts]
-    polished_evidence = [item for item in polished_evidence if is_safe_cover_letter_evidence_fragment(item)]
+    polished_evidence = [
+        item
+        for item in polished_evidence
+        if is_safe_cover_letter_evidence_fragment(item) and not lint_cover_letter_text(item)
+    ]
 
     if polished_evidence:
         evidence_clause = f"Examples include {polished_evidence[0]}, giving me a practical foundation for supporting software used in real operational workflows."
@@ -1138,6 +1172,7 @@ def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
         "Best regards,\n\n"
         "Vincent Morrill"
     )
+    validate_generated_cover_letter(letter)
     return letter
 
 
@@ -1386,20 +1421,24 @@ def generate_cover_letter_with_review(
             validate_generated_cover_letter(content)
         except ProcessingError as exc:
             validation_error_clean = sanitize_cover_letter_reason(str(exc))
-            if repair_passes > 0 and can_call_model():
-                repair_attempted = True
-                record_query("repair-pass")
-                repair_response = provider.complete(
-                    ModelRequest(
-                        system_prompt=COVER_LETTER_FINAL_SYSTEM_PROMPT,
-                        user_prompt=build_cover_letter_repair_prompt(letter_brief, content, validation_error_clean),
-                        temperature=0,
-                        max_tokens=900,
-                        response_format="text",
+            if repair_passes > 0:
+                for attempt in range(1, repair_passes + 1):
+                    if not can_call_model():
+                        break
+                    repair_attempted = True
+                    record_query(f"repair-pass-{attempt}")
+                    repair_response = provider.complete(
+                        ModelRequest(
+                            system_prompt=COVER_LETTER_FINAL_SYSTEM_PROMPT,
+                            user_prompt=build_cover_letter_repair_prompt(letter_brief, content, validation_error_clean),
+                            temperature=0,
+                            max_tokens=900,
+                            response_format="text",
+                        )
                     )
-                )
-                repaired = sanitize_generated_cover_letter(repair_response.text)
-                if repaired:
+                    repaired = sanitize_generated_cover_letter(repair_response.text)
+                    if not repaired:
+                        continue
                     try:
                         validate_generated_cover_letter(repaired)
                         repair_successful = True
@@ -1419,8 +1458,9 @@ def generate_cover_letter_with_review(
                             fallback_reason=None,
                             validation_error=None,
                         )
-                    except ProcessingError:
-                        pass
+                    except ProcessingError as repair_exc:
+                        validation_error_clean = sanitize_cover_letter_reason(str(repair_exc))
+                        continue
             reason = f"final model output failed validation: {exc}"
             return fallback_result(reason, validation_error=validation_error_clean)
 
