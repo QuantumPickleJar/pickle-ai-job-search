@@ -94,6 +94,8 @@ class UiSafetyTests(unittest.TestCase):
                 str(task["task_id"]),
                 "running",
             )
+            store.record_model_query(str(task["task_id"]), "draft-pass")
+            store.record_model_query(str(task["task_id"]), "critique-pass")
             error_text = "cover letter generation failed: model missing"
             store.transition(
                 str(task["task_id"]),
@@ -115,8 +117,11 @@ class UiSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(error_text, response.body.decode("utf-8"))
-        self.assertIn("Open workspace", response.body.decode("utf-8"))
+        body = response.body.decode("utf-8")
+        self.assertIn(error_text, body)
+        self.assertIn("Open workspace", body)
+        self.assertIn("Model query progress", body)
+        self.assertIn("Observed model queries during this task: <strong>2</strong>", body)
 
 
 if __name__ == "__main__":
