@@ -21,7 +21,7 @@ DEFAULT_COVER_LETTER_REVIEW_PASSES = "true"
 DEFAULT_COVER_LETTER_MAX_EVIDENCE_QUERIES = 10
 DEFAULT_COVER_LETTER_MAX_EVIDENCE_CARDS = 10
 DEFAULT_COVER_LETTER_MAX_MODEL_CALLS = 8
-DEFAULT_COVER_LETTER_REPAIR_PASSES = 1
+DEFAULT_COVER_LETTER_REPAIR_PASSES = 2
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -138,7 +138,13 @@ class Settings:
         )
         cover_letter_repair_passes = parse_positive_int(
             "COVER_LETTER_REPAIR_PASSES",
-            os.environ.get("COVER_LETTER_REPAIR_PASSES", str(DEFAULT_COVER_LETTER_REPAIR_PASSES)),
+            os.environ.get(
+                "COVER_LETTER_REPAIR_PASSES",
+                os.environ.get(
+                    "COVER_LETTER_MAX_REPAIR_PASSES",
+                    str(DEFAULT_COVER_LETTER_REPAIR_PASSES),
+                ),
+            ),
             minimum=0,
             maximum=5,
         )
