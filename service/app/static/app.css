@@ -733,6 +733,63 @@ label > span {
   font-size: 0.84rem;
 }
 
+.task-progress-block {
+  background: #fcfdfc;
+}
+
+.task-flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-flow li {
+  position: relative;
+  border: 1px solid #ccd5d1;
+  border-radius: 999px;
+  background: #f6f8f7;
+  color: #4c5a56;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.task-flow li span {
+  display: block;
+  padding: 8px 10px;
+}
+
+.task-flow li.done {
+  border-color: #b8d4c8;
+  background: #e9f4ef;
+  color: #245c4d;
+}
+
+.task-flow li.active {
+  border-color: #e4cfac;
+  background: #fbf4e7;
+  color: #805419;
+}
+
+.task-flow li.failed {
+  border-color: #e4bcbc;
+  background: #faeded;
+  color: #8f3434;
+}
+
+.task-query-events {
+  margin: 12px 0 0;
+  padding-left: 18px;
+}
+
+.task-query-events li {
+  margin: 5px 0;
+  font-size: 0.8rem;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

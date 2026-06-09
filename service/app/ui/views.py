@@ -268,6 +268,90 @@ def task_table(tasks: Iterable[dict[str, Any]]) -> str:
 """
 
 
+def task_progress_flow(task: dict[str, Any]) -> str:
+    task_type = str(task.get("task_type") or "process-job")
+    state = str(task.get("state") or "queued")
+    stage = str(task.get("pipeline_stage") or state)
+    query_count = int(task.get("model_query_count") or 0)
+    query_events = task.get("model_query_events") or []
+    events: list[tuple[str, str]] = []
+    for event in query_events:
+        if not isinstance(event, dict):
+            continue
+        at = str(event.get("at") or "")
+        event_stage = str(event.get("stage") or "model-query")
+        events.append((at, event_stage))
+
+    steps_by_type = {
+        "process-job": [
+            ("queued", "Queued"),
+            ("fit-analysis", "Fit analysis"),
+            ("persist-results", "Persist results"),
+            ("succeeded", "Completed"),
+        ],
+        "generate-cv": [
+            ("queued", "Queued"),
+            ("cv-draft", "Draft CV"),
+            ("cv-finalized", "Finalize CV"),
+            ("succeeded", "Completed"),
+        ],
+        "generate-cover-letter": [
+            ("queued", "Queued"),
+            ("build-brief", "Build brief"),
+            ("draft-pass", "Draft"),
+            ("critique-pass", "Critique"),
+            ("final-rewrite-pass", "Final rewrite"),
+            ("finalize-letter", "Validate and save"),
+            ("succeeded", "Completed"),
+        ],
+    }
+    steps = steps_by_type.get(task_type, steps_by_type["process-job"])
+    stage_ids = [item[0] for item in steps]
+
+    if state == "failed" and "failed" not in stage_ids:
+        steps = steps + [("failed", "Failed")]
+        stage_ids = [item[0] for item in steps]
+
+    if stage in stage_ids:
+        active_index = stage_ids.index(stage)
+    elif state in stage_ids:
+        active_index = stage_ids.index(state)
+    elif state == "succeeded":
+        active_index = len(steps) - 1
+    elif state == "running":
+        active_index = 1 if len(steps) > 1 else 0
+    else:
+        active_index = 0
+
+    step_html: list[str] = []
+    for index, (_, label) in enumerate(steps):
+        css_class = "pending"
+        if index < active_index:
+            css_class = "done"
+        elif index == active_index:
+            css_class = "active"
+        if state == "failed" and index == active_index:
+            css_class = "failed"
+        step_html.append(f'<li class="{css_class}"><span>{escape(label)}</span></li>')
+
+    events_html = ""
+    if events:
+        event_rows = "".join(
+            f"<li><span class=\"mono\">{escape(short_date(at))}</span> <strong>{escape(event_stage)}</strong></li>"
+            for at, event_stage in events[-8:]
+        )
+        events_html = f'<ul class="task-query-events">{event_rows}</ul>'
+
+    return (
+        '<section class="content-block task-progress-block">'
+        '<h3>Model query progress</h3>'
+        f'<p class="muted">Observed model queries during this task: <strong>{query_count}</strong></p>'
+        f'<ol class="task-flow">{"".join(step_html)}</ol>'
+        + events_html
+        + '</section>'
+    )
+
+
 def detail_grid(items: Iterable[tuple[str, Any]]) -> str:
     cells = []
     for label, value in items:

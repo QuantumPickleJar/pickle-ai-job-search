@@ -36,6 +36,7 @@ from app.ui.views import (
     selected,
     source_link,
     status_badge,
+    task_progress_flow,
     task_table,
     text_block,
 )
@@ -175,13 +176,18 @@ def task_detail(task_id: str, settings: Settings = Depends(get_settings)) -> HTM
     )
 
     sanitized_error = escape(str(task.get("error") or "No error recorded"))
+    progress = task_progress_flow(task)
     diagnostics = f'<section class="content-block"><h3>Error</h3><pre>{sanitized_error}</pre></section>'
     links_html = (
         f'<section class="content-block"><h3>Links</h3><p>{" | ".join(links)}</p></section>'
         if links
         else ""
     )
-    body = section("Task diagnostics", details + diagnostics + links_html)
+    body = (
+        '<div id="live-task-detail" data-live-fragment="1">'
+        + section("Task diagnostics", details + progress + diagnostics + links_html)
+        + "</div>"
+    )
     return HTMLResponse(
         page(
             title="Task detail",
