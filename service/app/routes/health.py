@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from app.services.diagnostics import smoke_test_model
 from app.config import Settings, get_settings
 from app.services.ollama_client import (
     OllamaClient,
@@ -76,3 +77,70 @@ def health_error(code: str, message: str, reachable: bool) -> JSONResponse:
             "error": message,
         },
     )
+
+
+@router.get("/health/model", response_model=None)
+def model_health(settings: Settings = Depends(get_settings)) -> dict[str, Any] | JSONResponse:
+    """Check if the configured model is available and reachable."""
+    try:
+        client = OllamaClient(settings.ollama_base_url)
+        tags = client.fetch_tags()
+    except OllamaHealthError as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "provider_reachable": False,
+                "configured_model": settings.ollama_model,
+                "error": str(exc),
+            },
+        )
+    except (OllamaInvalidResponseError, OllamaEndpointError) as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "provider_reachable": True,
+                "configured_model": settings.ollama_model,
+                "error": str(exc),
+            },
+        )
+
+    model_available = settings.ollama_model in tags.models
+    if model_available:
+        return {
+            "status": "ok",
+            "provider_reachable": True,
+            "configured_model": settings.ollama_model,
+            "model_available": True,
+        }
+
+    return JSONResponse(
+        status_code=503,
+        content={
+            "status": "error",
+            "provider_reachable": True,
+            "configured_model": settings.ollama_model,
+            "model_available": False,
+            "error": f"Model '{settings.ollama_model}' is not installed",
+        },
+    )
+
+
+@router.post("/diagnostics/model-smoke-test", response_model=None)
+def model_smoke_test(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    """Run a smoke test of the configured Ollama provider."""
+    diagnostics = smoke_test_model(settings)
+    
+    return {
+        "status": "ok" if diagnostics.provider_reachable else "error",
+        "provider_reachable": diagnostics.provider_reachable,
+        "configured_model": diagnostics.configured_model,
+        "fallback_model": diagnostics.fallback_model,
+        "num_ctx": diagnostics.num_ctx,
+        "keep_alive": diagnostics.keep_alive,
+        "response_text": diagnostics.response_text,
+        "elapsed_ms": round(diagnostics.elapsed_ms, 2),
+        "error": diagnostics.error,
+    }
+

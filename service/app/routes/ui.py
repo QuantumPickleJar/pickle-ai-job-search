@@ -888,6 +888,44 @@ def health_page(settings: Settings = Depends(get_settings)) -> HTMLResponse:
             ("API key", "Configured" if settings.app_api_key else "Not configured"),
         )
     )
+    diagnostics_html = """
+<section class="content-block">
+  <p>Run a smoke test to verify that the running service can reach the model provider:</p>
+  <button id="smoke-test-btn" class="button" onclick="runSmokeTest()">Run smoke test</button>
+  <div id="smoke-test-result" style="display: none; margin-top: 1rem;">
+    <pre id="smoke-test-output" style="max-height: 300px; overflow-y: auto;"></pre>
+  </div>
+</section>
+<script>
+function runSmokeTest() {
+    const btn = document.getElementById('smoke-test-btn');
+    const result = document.getElementById('smoke-test-result');
+    const output = document.getElementById('smoke-test-output');
+    
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+    result.style.display = 'none';
+    
+    fetch('/diagnostics/model-smoke-test', {
+        method: 'POST',
+        headers: {'Accept': 'application/json'},
+    })
+    .then(r => r.json())
+    .then(data => {
+        output.textContent = JSON.stringify(data, null, 2);
+        result.style.display = 'block';
+    })
+    .catch(err => {
+        output.textContent = 'Error: ' + err.toString();
+        result.style.display = 'block';
+    })
+    .finally(() => {
+        btn.disabled = false;
+        btn.textContent = 'Run smoke test';
+    });
+}
+</script>
+"""
     body = f"""
 <div class="status-grid">
   <section class="status-card">
@@ -901,6 +939,7 @@ def health_page(settings: Settings = Depends(get_settings)) -> HTMLResponse:
 </div>
 {section("Configuration", config)}
 {section("Installed models", f'<ul class="model-list">{models_html}</ul>')}
+{section("Model diagnostics", diagnostics_html)}
 """
     return HTMLResponse(
         page(
