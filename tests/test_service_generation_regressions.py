@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 import sys
 from typing import Any
@@ -15,13 +16,16 @@ from app.services.processing import (
     build_cover_letter_brief,
     build_fallback_cover_letter,
     build_cover_letter_prompt,
+    generate_cover_letter,
     generate_cover_letter_with_review,
     is_internal_only_requirement,
+    sanitize_cover_letter_reason,
     build_profile_context,
     sanitize_generated_cover_letter,
     validate_generated_cover_letter,
 )
 from app.ui.views import task_table
+import app.services.processing as processing_module
 
 
 class FakeProvider:
@@ -39,6 +43,35 @@ class FakeProvider:
             }
         )
         text = self.responses[len(self.calls) - 1] if len(self.calls) - 1 < len(self.responses) else ""
+        return ModelResponse(text=text)
+
+
+class FakeFailingProvider:
+    def complete(self, request: Any) -> ModelResponse:
+        from ai_job_search.model_provider import ModelProviderError
+
+        raise ModelProviderError("request failed with X-API-Key=super-secret-token")
+
+
+class FakeOllamaProvider:
+    responses: list[str] = []
+    index: int = 0
+
+    def __init__(self, model: str, base_url: str, timeout_seconds: int) -> None:
+        self.model = model
+        self.base_url = base_url
+        self.timeout_seconds = timeout_seconds
+
+    @classmethod
+    def reset(cls, responses: list[str]) -> None:
+        cls.responses = responses
+        cls.index = 0
+
+    def complete(self, request: Any) -> ModelResponse:
+        if FakeOllamaProvider.index >= len(FakeOllamaProvider.responses):
+            return ModelResponse(text="")
+        text = FakeOllamaProvider.responses[FakeOllamaProvider.index]
+        FakeOllamaProvider.index += 1
         return ModelResponse(text=text)
 
 
@@ -88,17 +121,32 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             "role_title": "Software Engineer",
             "company": "OneStream",
             "matched_skills": ["C#", ".NET"],
-            "verified_profile_context": "Profile says BizLink is enterprise application experience.",
+            "evidence_cards": [{"theme": "Enterprise", "text": "BizLink evidence", "source_file": "cover_letter_evidence.md", "claim_boundary": "Do not overclaim."}],
         }
         prompt = build_cover_letter_prompt(brief)
 
         self.assertIn("Letter Brief JSON", prompt)
-        self.assertIn("Profile says BizLink", prompt)
+        self.assertIn("BizLink evidence", prompt)
         self.assertIn("Vincent Morrill", prompt)
         self.assertNotIn("[Candidate Name]", prompt)
         self.assertNotIn('"missing_skills"', prompt)
         self.assertNotIn("Minimum 2-3 years", prompt)
         self.assertNotIn("Internal-only missing skill risks", prompt)
+        self.assertIn("Do not mention source filenames", prompt)
+        self.assertNotIn("profile/resume_facts.md", prompt)
+
+    def test_cover_letter_brief_adds_evidence_bullets(self) -> None:
+        brief = build_cover_letter_brief(
+            job={"title": "Application Engineer", "company": "Forterra"},
+            fit={"matched_skills": ["C#", ".NET", "SQL"]},
+            profile_context="BizLink UWO portal Applied Benefits C# .NET SQL",
+            documents_context="doc inventory",
+            identity={"name": "Vincent Morrill", "email": "vince.codefactory@outlook.com"},
+        )
+        evidence_cards = brief.get("evidence_cards") or []
+        evidence = [str(card.get("text") or "") for card in evidence_cards if isinstance(card, dict)]
+        self.assertGreaterEqual(len(evidence), 3)
+        self.assertIn("BizLink", " ".join(evidence))
 
     def test_cover_letter_brief_excludes_internal_fit_fields(self) -> None:
         brief = build_cover_letter_brief(
@@ -205,6 +253,9 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             "role_title": "Application Services Software Engineer",
             "company": "Forterra",
             "matched_skills": ["C#", ".NET Core", "SQL", "enterprise application development"],
+            "evidence_bullets": [
+                "Contributed feature work and unit-tested business-rule changes in BizLink, an enterprise-grade insurance quoting workflow.",
+            ],
         }
         fallback = build_fallback_cover_letter(brief)
         validate_generated_cover_letter(fallback)
@@ -212,6 +263,11 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         self.assertIn("Best regards", fallback)
         self.assertIn("Vincent Morrill", fallback)
         self.assertIn("enterprise", lowered)
+        self.assertIn("C#, .NET Core, and SQL", fallback)
+        self.assertNotIn("role's focus and scope", lowered)
+        self.assertLessEqual(lowered.count("business-critical"), 1)
+        self.assertNotIn("transparent communication, measurable outcomes", lowered)
+        self.assertNotIn("i am excited", lowered)
         self.assertNotIn("minimum 2-3 years", lowered)
         self.assertNotIn("power platform", lowered)
         self.assertNotIn("microsoft 365", lowered)
@@ -233,17 +289,22 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             profile_context="verified profile facts",
             documents_context="document inventory",
             identity={"name": "Vincent Morrill", "email": "vince.codefactory@outlook.com"},
+            settings=None,
             provider=provider,
             review_passes=True,
         )
 
         self.assertEqual(len(provider.calls), 3)
-        self.assertIn("Dear Hiring Manager", result)
-        self.assertIn("Vincent Morrill", result)
+        self.assertEqual(result.source, "model-final")
+        self.assertEqual(result.model_query_count_actual, 3)
+        self.assertIsNone(result.fallback_reason)
+        self.assertIn("Dear Hiring Manager", result.content)
+        self.assertIn("Vincent Morrill", result.content)
 
     def test_multi_pass_uses_fallback_when_final_is_unsafe(self) -> None:
         provider = FakeProvider(
             responses=[
+                '{"queries":["insurance workflow evidence"]}',
                 polished_letter(),
                 "- remove unsafe phrases",
                 "Dear Hiring Manager,\n\nI am the ideal candidate and I have minimum 2-3 years.\n\nBest regards,\n\nVincent Morrill",
@@ -256,13 +317,134 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             profile_context="verified profile facts",
             documents_context="document inventory",
             identity={"name": "Vincent Morrill", "email": "vince.codefactory@outlook.com"},
+            settings=None,
             provider=provider,
             review_passes=True,
         )
 
-        self.assertEqual(len(provider.calls), 3)
-        self.assertIn("I am excited to apply", result)
-        self.assertNotIn("ideal candidate", result.lower())
+        self.assertEqual(result.source, "deterministic-fallback")
+        self.assertEqual(result.model_query_count_actual, 3)
+        self.assertIsNotNone(result.fallback_reason)
+        self.assertIn("failed validation", (result.fallback_reason or "").lower())
+        self.assertIn("I am applying for", result.content)
+        self.assertNotIn("ideal candidate", result.content.lower())
+
+    def test_fallback_reason_is_sanitized(self) -> None:
+        result = generate_cover_letter_with_review(
+            job={"title": "Application Services Software Engineer", "company": "Forterra"},
+            fit={"matched_skills": ["C#", ".NET", "SQL"]},
+            profile_context="verified profile facts",
+            documents_context="document inventory",
+            identity={"name": "Vincent Morrill", "email": "vince.codefactory@outlook.com"},
+            settings=None,
+            provider=FakeFailingProvider(),
+            review_passes=True,
+        )
+        reason = result.fallback_reason or ""
+        self.assertEqual(result.source, "deterministic-fallback")
+        self.assertIn("[redacted]", reason)
+        self.assertNotIn("super-secret-token", reason)
+
+    def test_generate_cover_letter_writes_meta_with_fallback_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            app_id = "forterra-application-services"
+            app_dir = root / "applications" / app_id
+            app_dir.mkdir(parents=True, exist_ok=True)
+            (app_dir / "job.json").write_text(
+                json.dumps({"title": "Application Services Software Engineer", "company": "Forterra", "location": "Remote"}),
+                encoding="utf-8",
+            )
+            (app_dir / "fit-analysis.json").write_text(
+                json.dumps({"matched_skills": ["C#", ".NET", "SQL"]}),
+                encoding="utf-8",
+            )
+
+            settings = Settings(
+                app_host="127.0.0.1",
+                app_port=3927,
+                app_data_dir=root,
+                ollama_base_url="http://localhost:11434",
+                ollama_model="qwen2.5:7b",
+                app_api_key="test",
+                enable_remote_mode=False,
+                cover_letter_review_passes=True,
+            )
+
+            original_provider = processing_module.OllamaProvider
+            processing_module.OllamaProvider = FakeOllamaProvider
+            FakeOllamaProvider.reset([
+                '{"queries":["C# .NET SQL evidence"]}',
+                polished_letter(),
+                "- remove unsafe claims",
+                "Dear Hiring Manager,\n\nI am the ideal candidate and I have minimum 2-3 years.\n\nBest regards,\n\nVincent Morrill",
+            ])
+            try:
+                output = generate_cover_letter(app_id, settings)
+            finally:
+                processing_module.OllamaProvider = original_provider
+
+            self.assertTrue(output.is_file())
+            meta_path = app_dir / "cover-letter.meta.json"
+            self.assertTrue(meta_path.is_file())
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            self.assertEqual(meta.get("source"), "deterministic-fallback")
+            self.assertTrue(bool(meta.get("fallback_reason")))
+            self.assertTrue(meta.get("review_passes_enabled"))
+            self.assertTrue(meta.get("tool_access", {}).get("enabled"))
+            self.assertIsInstance(meta.get("evidence_cards_used"), list)
+
+    def test_generate_cover_letter_writes_meta_with_model_final_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            app_id = "forterra-application-services"
+            app_dir = root / "applications" / app_id
+            app_dir.mkdir(parents=True, exist_ok=True)
+            (app_dir / "job.json").write_text(
+                json.dumps({"title": "Application Services Software Engineer", "company": "Forterra", "location": "Remote"}),
+                encoding="utf-8",
+            )
+            (app_dir / "fit-analysis.json").write_text(
+                json.dumps({"matched_skills": ["C#", ".NET", "SQL"]}),
+                encoding="utf-8",
+            )
+
+            settings = Settings(
+                app_host="127.0.0.1",
+                app_port=3927,
+                app_data_dir=root,
+                ollama_base_url="http://localhost:11434",
+                ollama_model="qwen2.5:7b",
+                app_api_key="test",
+                enable_remote_mode=False,
+                cover_letter_review_passes=True,
+            )
+
+            original_provider = processing_module.OllamaProvider
+            processing_module.OllamaProvider = FakeOllamaProvider
+            FakeOllamaProvider.reset([
+                '{"queries":["enterprise workflow evidence"]}',
+                polished_letter(),
+                "- keep tone direct",
+                polished_letter(),
+            ])
+            try:
+                output = generate_cover_letter(app_id, settings)
+            finally:
+                processing_module.OllamaProvider = original_provider
+
+            self.assertTrue(output.is_file())
+            meta = json.loads((app_dir / "cover-letter.meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta.get("source"), "model-final")
+            self.assertIsNone(meta.get("fallback_reason"))
+            self.assertIsInstance(meta.get("evidence_cards_used"), list)
+
+    def test_reason_sanitizer_redacts_keys(self) -> None:
+        raw = "failed with X-API-Key=secret-token and api_key=abc123"
+        cleaned = sanitize_cover_letter_reason(raw)
+        self.assertIn("[redacted]", cleaned)
+        self.assertNotIn("secret-token", cleaned)
+        self.assertNotIn("abc123", cleaned)
 
     def test_build_profile_context_includes_enterprise_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -283,7 +465,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
                 app_port=3927,
                 app_data_dir=root,
                 ollama_base_url="http://localhost:11434",
-                ollama_model="qwen2.5:14b",
+                ollama_model="qwen2.5:7b",
                 app_api_key="test",
                 enable_remote_mode=False,
             )
