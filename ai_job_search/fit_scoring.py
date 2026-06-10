@@ -318,7 +318,10 @@ def load_fit_profile_context(repo_root: Path, max_chars: int = FIT_ANALYSIS_MAX_
         break
 
     if sections:
-        return "\n\n".join(sections)
+        joined = "\n\n".join(sections)
+        if len(joined) > max_chars:
+            return joined[:max_chars].rstrip()
+        return joined
     return MINIMAL_PROFILE_CONTEXT
 
 
