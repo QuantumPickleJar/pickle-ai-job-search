@@ -21,7 +21,7 @@ from ai_job_search.model_provider import (
 
 
 DEFAULT_BASE_URL = "http://localhost:11434"
-DEFAULT_MODEL = "qwen2.5:14b"
+DEFAULT_MODEL = "qwen2.5:7b"
 DEFAULT_NUM_CTX = 2048
 DEFAULT_KEEP_ALIVE = "0"
 DEFAULT_TIMEOUT_SECONDS = 60
