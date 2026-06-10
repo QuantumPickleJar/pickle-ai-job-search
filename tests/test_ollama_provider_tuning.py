@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -7,6 +8,11 @@ from ai_job_search.providers.ollama import OllamaProvider
 
 
 class OllamaProviderTuningTests(unittest.TestCase):
+    @patch.dict(os.environ, {}, clear=True)
+    def test_default_model_is_7b(self) -> None:
+        provider = OllamaProvider()
+        self.assertEqual(provider.model, "qwen2.5:7b")
+
     @patch("ai_job_search.providers.ollama.urllib.request.urlopen")
     def test_build_payload_uses_num_ctx_and_keep_alive_defaults(self, _urlopen) -> None:
         provider = OllamaProvider(model="qwen2.5:14b")

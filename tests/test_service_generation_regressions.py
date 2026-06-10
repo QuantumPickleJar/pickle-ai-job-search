@@ -28,6 +28,7 @@ from app.services.processing import (
     generate_cover_letter,
     generate_cover_letter_with_review,
     is_internal_only_requirement,
+    lint_cover_letter_paragraph_roles,
     polish_evidence_clause,
     sanitize_cover_letter_reason,
     build_profile_context,
@@ -90,19 +91,18 @@ class FakeOllamaProvider:
 def polished_letter() -> str:
     return (
         "Dear Hiring Manager,\n\n"
-        "I am excited to apply for the Application Services Software Engineer position at Forterra. "
-        "My background in C#, .NET, SQL, and enterprise application development aligns with the role's focus "
-        "on supporting business-critical internal platforms and dependable software delivery across changing business priorities.\n\n"
-        "In recent work, I have contributed to internal and enterprise-grade systems by implementing features, "
-        "writing unit tests, improving workflow behavior, and collaborating through pull request based delivery. "
-        "My experience includes internal university IT applications, benefits and insurance software, and insurance "
-        "quoting workflows that require practical communication and attention to service reliability under real deadlines.\n\n"
-        "I am particularly interested in this opportunity because it combines engineering execution with stakeholder "
-        "support and operational problem solving. I would bring a grounded and maintainable development approach, "
-        "clear communication with technical and non technical partners, and a strong commitment to steady improvement "
-        "in a collaborative team environment where shipping quality software consistently matters.\n\n"
-        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my experience can "
-        "support your team and contribute to dependable application services.\n\n"
+        "I am applying for the Application Services Software Engineer position at Forterra. "
+        "My background in C#, .NET, SQL, and enterprise application development aligns with Forterra's focus on "
+        "maintaining and improving application services and internal platforms.\n\n"
+        "In recent development work, I have implemented features, written unit tests, improved workflow behavior, "
+        "and collaborated through pull-request-based delivery. That work has required translating requirements and "
+        "business rules into maintainable behavior, validating changes carefully before release, and handing off "
+        "context clearly so teammates can continue implementation in the next sprint without losing delivery context.\n\n"
+        "What interests me about this role is the mix of software delivery, stakeholder support, and steady "
+        "improvement of business applications. I would bring clear implementation habits, testing discipline, and "
+        "a practical approach to supporting Forterra's platform environment while ramping into the team's specific tools and workflows. "
+        "I value direct collaboration with stakeholders so priorities, constraints, and release expectations stay clear through delivery.\n\n"
+        "Thank you for your consideration. I would welcome a conversation about how my C#/.NET application experience can support Forterra's team.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
     )
@@ -382,6 +382,93 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         validate_generated_cover_letter(sanitized)
         self.assertIn("Vincent Morrill", sanitized)
 
+    def test_paragraph_role_linter_flags_overlap_between_first_two_paragraphs(self) -> None:
+        letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra. My background in C#, .NET, and SQL supports internal enterprise application systems and application services used across shared internal systems.\n\n"
+            "In recent development work, I have contributed to internal and enterprise application systems and services with application support responsibilities across shared internal systems while implementing features and writing unit tests for release-ready changes.\n\n"
+            "I am interested in the role because it combines software delivery with stakeholder support. I work best through direct communication and steady follow-through, and I coordinate feedback early so requirement changes are translated into clear implementation steps.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        issues = lint_cover_letter_paragraph_roles(letter)
+        self.assertTrue(any(issue.rule == "paragraph_role_p1_p2_redundant_language" for issue in issues))
+
+    def test_validator_rejects_paragraph_overlap_between_first_two_paragraphs(self) -> None:
+        letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra. My background in C#, .NET, and SQL supports internal enterprise application systems and application services used across shared internal systems.\n\n"
+            "In recent development work, I have contributed to internal and enterprise application systems and services with application support responsibilities across shared internal systems while implementing features and writing unit tests for release-ready changes.\n\n"
+            "I am interested in the role because it combines software delivery with stakeholder support. I work best through direct communication and steady follow-through, and I coordinate feedback early so requirement changes are translated into clear implementation steps.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(letter)
+        self.assertIn("paragraph_role_p1_p2_redundant_language", str(context.exception))
+
+    def test_paragraph_role_linter_flags_overuse_of_support_application_system_terms(self) -> None:
+        letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra. My background includes support for internal application systems and application services used by shared teams.\n\n"
+            "I have worked in application support across internal systems and services, including support tasks tied to business application workflows and systems handoffs.\n\n"
+            "I am interested in the role and would bring a practical delivery mindset.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        issues = lint_cover_letter_paragraph_roles(letter)
+        self.assertTrue(any(issue.rule == "paragraph_role_p1_p2_term_overuse" for issue in issues))
+
+    def test_validator_rejects_closing_with_back_to_back_invitation_sentences(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra. My background in C#, .NET, SQL, and enterprise application development aligns with the role and the team's priorities for application reliability and internal platform improvements.\n\n"
+            "In recent development work, I have implemented features, written unit tests, improved workflow behavior, and collaborated through pull-request-based delivery.\n\n"
+            "I am interested in the role because it combines software delivery with stakeholder support and steady improvement of business applications, and I value clear communication as requirements evolve across delivery cycles.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my application experience can support Forterra's team. I would also value the opportunity to discuss how I could contribute to application delivery and support.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("paragraph_role_duplicate_closing_invitation", str(context.exception))
+
+    def test_validator_rejects_paragraph_two_stack_restatement_without_evidence(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra. My background in C#, .NET, and SQL aligns with the role and supports the team's focus on internal business applications.\n\n"
+            "My C#, .NET, and SQL experience supports enterprise application systems and internal application services, and I have written unit tests for release changes.\n\n"
+            "I am interested in the role because it combines software delivery with stakeholder support, and I would bring a practical approach to communicating implementation choices as requirements evolve.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my application experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("paragraph_role_p2_stack_restatement", str(context.exception))
+
+    def test_validator_rejects_adjacent_shared_internal_phrase_conflict(self) -> None:
+        bad_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am applying for the Application Services Software Engineer position at Forterra. My experience includes support for shared internal systems in business application environments.\n\n"
+            "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features and validating changes through unit tests.\n\n"
+            "I am interested in the role because it combines delivery and support.\n\n"
+            "Thank you for your consideration. I would welcome a conversation about how my experience can support Forterra's team.\n\n"
+            "Best regards,\n\n"
+            "Vincent Morrill"
+        )
+        with self.assertRaises(ProcessingError) as context:
+            validate_generated_cover_letter(bad_letter)
+        self.assertIn("paragraph_role_adjacent_phrase_conflict", str(context.exception))
+
+    def test_improved_forterra_letter_passes_paragraph_role_checks(self) -> None:
+        issues = lint_cover_letter_paragraph_roles(polished_letter())
+        self.assertEqual(issues, [])
+        validate_generated_cover_letter(polished_letter())
+
     def test_fallback_cover_letter_is_safe_and_polished(self) -> None:
         brief = {
             "role_title": "Application Services Software Engineer",
@@ -473,7 +560,8 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
             ],
         }
         fallback = build_fallback_cover_letter(brief)
-        self.assertIn("One example is my work on contributing feature work", fallback)
+        self.assertIn("In recent development work, I have contributed to business-facing systems by implementing features", fallback)
+        self.assertIn("translating requirements into maintainable application behavior", fallback)
         self.assertNotIn("SQL or relational database work where supported by actual projects.", fallback)
         self.assertNotIn("and SQL and", fallback)
         self.assertNotIn("Add verified", fallback)
@@ -494,7 +582,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         fallback = build_fallback_cover_letter(brief)
         self.assertNotIn("Only use verified facts", fallback)
         self.assertNotIn("Examples include Only use", fallback)
-        self.assertIn("That work has included feature contributions, testing-focused improvements", fallback)
+        self.assertIn("In recent development work, I have contributed to business-facing systems", fallback)
 
     def test_fallback_uses_generic_safe_evidence_when_curated_file_missing(self) -> None:
         brief = {
@@ -510,7 +598,7 @@ class ServiceGenerationRegressionTests(unittest.TestCase):
         fallback = build_fallback_cover_letter(brief)
         self.assertNotIn("One example is", fallback)
         self.assertIn("In recent development work, I have contributed", fallback)
-        self.assertIn("That work has included feature contributions, testing-focused improvements", fallback)
+        self.assertIn("translating requirements into maintainable application behavior", fallback)
 
     def test_fallback_cover_letter_does_not_contain_sentence_starting_with_contributed(self) -> None:
         brief = {
