@@ -20,7 +20,7 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 
-DEFAULT_MODEL = "qwen2.5:14b"
+DEFAULT_MODEL = "qwen2.5:7b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_APP_HOST = "127.0.0.1"
 DEFAULT_APP_PORT = "3927"

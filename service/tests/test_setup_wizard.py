@@ -30,7 +30,7 @@ APP_HOST=127.0.0.1
 APP_PORT=3927
 APP_DATA_DIR=/app/data
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:14b
+OLLAMA_MODEL=qwen2.5:7b
 APP_API_KEY=replace-with-a-strong-random-secret
 ENABLE_REMOTE_MODE=false
 CUSTOM_VALUE=preserve-me
@@ -281,7 +281,7 @@ class SetupWizardCliTests(unittest.TestCase):
             "APP_PORT=3927",
             "APP_DATA_DIR=/app/data",
             "OLLAMA_BASE_URL=http://localhost:11434",
-            "OLLAMA_MODEL=qwen2.5:14b",
+            "OLLAMA_MODEL=qwen2.5:7b",
             "PUID=",
             "PGID=",
         ):
