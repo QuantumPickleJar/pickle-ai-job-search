@@ -155,6 +155,59 @@ PARAGRAPH_OVERLAP_TERMS = (
     "validation",
     "software quality",
 )
+PARAGRAPH_P1_P2_REDUNDANCY_TERMS = (
+    "internal",
+    "enterprise",
+    "application",
+    "applications",
+    "systems",
+    "services",
+    "support",
+    "c#",
+    ".net",
+    "sql",
+)
+PARAGRAPH_STACK_TERMS = (
+    "c#",
+    ".net",
+    "sql",
+)
+PARAGRAPH_TWO_WORK_EVIDENCE_TERMS = (
+    "implementing features",
+    "implemented features",
+    "writing unit tests",
+    "unit tests",
+    "improving workflow behavior",
+    "workflow behavior",
+    "translating requirements",
+    "business rules",
+    "maintainable behavior",
+    "validating changes",
+    "pull-request-based",
+    "pull request",
+)
+P1_P2_OVERUSE_TERMS = (
+    "support",
+    "application",
+    "applications",
+    "systems",
+    "services",
+)
+ADJACENT_PARAGRAPH_CONFLICT_PHRASES = (
+    "shared internal systems",
+    "internal and enterprise-grade systems",
+)
+INVITATION_OR_CONTRIBUTION_MARKERS = (
+    "i would welcome a conversation",
+    "i would welcome the opportunity to discuss",
+    "i would value the opportunity to discuss",
+    "i would also value the opportunity to discuss",
+    "i would bring",
+    "i can contribute",
+    "how my",
+    "can support",
+    "could support",
+)
 ROLE_SENTENCE_STOPWORDS = {
     "about",
     "across",
@@ -591,6 +644,16 @@ def _paragraph_term_hits(paragraph: str, terms: tuple[str, ...]) -> set[str]:
     return {term for term in terms if term in lowered}
 
 
+def _paragraph_term_count(paragraph: str, terms: tuple[str, ...]) -> int:
+    lowered = paragraph.casefold()
+    return sum(lowered.count(term) for term in terms)
+
+
+def _sentence_is_invitation_or_contribution(sentence: str) -> bool:
+    lowered = sentence.casefold()
+    return any(marker in lowered for marker in INVITATION_OR_CONTRIBUTION_MARKERS)
+
+
 def _significant_sentence_tokens(sentence: str) -> set[str]:
     tokens = {
         token
@@ -644,6 +707,35 @@ def lint_cover_letter_paragraph_roles(text: str) -> list[CoverLetterQualityIssue
                 body_paragraphs[1],
             )
 
+        p1_stack_hits = _paragraph_term_hits(body_paragraphs[0], PARAGRAPH_STACK_TERMS)
+        p2_stack_hits = _paragraph_term_hits(body_paragraphs[1], PARAGRAPH_STACK_TERMS)
+        if len(p1_stack_hits) >= 2 and len(p2_stack_hits) >= 2 and len(paragraph_two_hits) < 2:
+            add(
+                "paragraph_role_p2_stack_restatement",
+                "Paragraph 2 repeats the stack from paragraph 1 without enough concrete work evidence",
+                body_paragraphs[1],
+            )
+
+        repeated_redundancy_terms = _paragraph_term_hits(body_paragraphs[0], PARAGRAPH_P1_P2_REDUNDANCY_TERMS) & _paragraph_term_hits(
+            body_paragraphs[1], PARAGRAPH_P1_P2_REDUNDANCY_TERMS
+        )
+        if len(repeated_redundancy_terms) >= 4:
+            add(
+                "paragraph_role_p1_p2_redundant_language",
+                "Paragraphs 1 and 2 repeat internal/enterprise application language too heavily",
+                body_paragraphs[1],
+            )
+
+        p1_overuse_hits = _paragraph_term_hits(body_paragraphs[0], P1_P2_OVERUSE_TERMS)
+        p2_overuse_hits = _paragraph_term_hits(body_paragraphs[1], P1_P2_OVERUSE_TERMS)
+        shared_overuse_hits = p1_overuse_hits & p2_overuse_hits
+        if len(p1_overuse_hits) >= 3 and len(p2_overuse_hits) >= 3 and len(shared_overuse_hits) >= 3:
+            add(
+                "paragraph_role_p1_p2_term_overuse",
+                "Paragraphs 1 and 2 overuse support/application/systems language",
+                body_paragraphs[1],
+            )
+
     if len(body_paragraphs) >= 3:
         second_sentences = split_cover_letter_sentences(body_paragraphs[1])
         third_sentences = split_cover_letter_sentences(body_paragraphs[2])
@@ -669,6 +761,32 @@ def lint_cover_letter_paragraph_roles(text: str) -> list[CoverLetterQualityIssue
                 "Adjacent paragraphs repeat too many of the same generic concepts",
                 body_paragraphs[index + 1],
             )
+
+        left = body_paragraphs[index].casefold()
+        right = body_paragraphs[index + 1].casefold()
+        if (
+            ADJACENT_PARAGRAPH_CONFLICT_PHRASES[0] in left
+            and ADJACENT_PARAGRAPH_CONFLICT_PHRASES[1] in right
+        ) or (
+            ADJACENT_PARAGRAPH_CONFLICT_PHRASES[1] in left
+            and ADJACENT_PARAGRAPH_CONFLICT_PHRASES[0] in right
+        ):
+            add(
+                "paragraph_role_adjacent_phrase_conflict",
+                "Adjacent paragraphs should not combine 'shared internal systems' with 'internal and enterprise-grade systems'",
+                body_paragraphs[index + 1],
+            )
+
+    if len(body_paragraphs) >= 1:
+        closing_sentences = split_cover_letter_sentences(body_paragraphs[-1])
+        for left, right in zip(closing_sentences, closing_sentences[1:]):
+            if _sentence_is_invitation_or_contribution(left) and _sentence_is_invitation_or_contribution(right):
+                add(
+                    "paragraph_role_duplicate_closing_invitation",
+                    "Closing paragraph should not contain back-to-back invitation/contribution sentences",
+                    body_paragraphs[-1],
+                )
+                break
 
     return issues
 
@@ -1356,9 +1474,13 @@ Style constraints:
 
 Required paragraph roles:
 - Paragraph 1: Role fit only. Mention the role, company, and 2 to 4 core skills. Do not include detailed work-style claims.
-- Paragraph 2: Evidence only. Use one concrete experience or curated evidence anchor.
+- Paragraph 2: Evidence only. Use concrete development practice and proof (feature implementation, unit tests, workflow improvements, translating requirements/business rules, validation, pull-request collaboration).
 - Paragraph 3: Motivation and working style. Explain interest in the role and how the candidate works.
 - Paragraph 4: Closing only. Keep it short and invite discussion.
+- If paragraph 1 names the C#/.NET/SQL stack, paragraph 2 must not restate the same stack without adding concrete evidence.
+- Avoid heavy repetition of internal/enterprise/application/systems/services/support language across paragraphs 1 and 2.
+- Do not use both "shared internal systems" and "internal and enterprise-grade systems" in adjacent paragraphs.
+- Keep the closing to one invitation/contribution sentence after the thank-you sentence.
 
 Letter Brief JSON:
 {brief_json}
@@ -1662,12 +1784,16 @@ Rubric:
 - Paragraph 3 focuses on motivation and working style without repeating the evidence sentence
 - Paragraph 4 is a short closing invitation
 - second paragraph contains one concrete evidence anchor or one polished generic evidence sentence
+- if paragraph 1 names C#/.NET/SQL, paragraph 2 should add concrete evidence rather than restating the stack
 - does not repeat nearby sentence openings with "This"
 - avoids repeated noun stacking like development work / this work
 - avoids repeated generic descriptors like practical, reliable, operational, stable, maintainability, or business-critical
 - avoids closing filler such as "I am available to share concrete examples..."
 - prefers company-specific phrasing over "the team's platform environment"
 - avoids adjacent paragraph overlap on testing / handoff / workflow / validation / maintainable concepts
+- avoids heavy p1/p2 repetition of internal/enterprise/application/systems/services/support language
+- avoids adjacent phrase conflict between "shared internal systems" and "internal and enterprise-grade systems"
+- avoids back-to-back invitation/contribution sentences in the closing paragraph
 - stays within 4 body paragraphs before the sign-off
 """
 
@@ -1696,10 +1822,14 @@ Requirements:
 - prefer company-specific phrasing over "the team's platform environment"
 - keep the letter to 4 body paragraphs or fewer before the sign-off
 - Paragraph 1: role fit only, with role, company, and 2 to 4 core skills
-- Paragraph 2: concrete evidence only
+- Paragraph 2: concrete evidence only (feature implementation, unit tests, workflow behavior improvements, requirements/business-rule translation, validation, pull-request collaboration)
 - Paragraph 3: motivation and working style only
 - Paragraph 4: short closing invitation
 - avoid repeating generic testing / handoff / workflow / validation concepts across adjacent paragraphs
+- if paragraph 1 names C#/.NET/SQL, paragraph 2 should not just restate that stack
+- avoid heavy p1/p2 repetition of internal/enterprise/application/systems/services/support language
+- do not put two invitation/contribution sentences back-to-back in the closing paragraph
+- do not use both "shared internal systems" and "internal and enterprise-grade systems" in adjacent paragraphs
 
 Letter Brief JSON:
 {brief_json}
@@ -1724,9 +1854,10 @@ def build_cover_letter_repair_prompt(
         role_repair_guidance = (
             "- Do not add new claims.\n"
             "- Make paragraph 1 shorter and focused on role fit.\n"
-            "- Move work evidence to paragraph 2.\n"
+            "- Move work evidence to paragraph 2 and avoid repeating the stack there without concrete proof.\n"
             "- Keep paragraph 3 focused on interest and working style.\n"
             "- Remove repeated concepts instead of paraphrasing them.\n"
+            "- Keep only one invitation/contribution sentence in the closing paragraph.\n"
         )
     return f"""Rewrite this cover letter so it is safe and submission-ready.
 
@@ -1756,6 +1887,10 @@ Rules:
     - Paragraph 2: evidence only
     - Paragraph 3: motivation and working style
     - Paragraph 4: short closing invitation
+- Do not restate C#/.NET/SQL in paragraph 2 unless it adds concrete work evidence.
+- Reduce repetition of internal/enterprise/application/systems/services/support language between paragraphs 1 and 2.
+- Do not use both "shared internal systems" and "internal and enterprise-grade systems" in adjacent paragraphs.
+- Avoid back-to-back invitation/contribution sentences in the closing paragraph.
 {role_repair_guidance}
 
 Letter Brief JSON:
@@ -1772,44 +1907,12 @@ Validation error:
 def build_fallback_cover_letter(letter_brief: dict[str, Any]) -> str:
     role_title = str(letter_brief.get("role_title") or "Application Services Software Engineer").strip()
     company = str(letter_brief.get("company") or "the company").strip()
-    stack = "C#, .NET Core, SQL, and enterprise application development"
-    evidence_cards = [item for item in letter_brief.get("evidence_cards", []) if isinstance(item, dict)]
-    evidence_cards.sort(
-        key=lambda item: 0 if str(item.get("source_file") or "") == "cover_letter_evidence.md" else 1
-    )
-    evidence_texts = [
-        str(item.get("text") or "").strip()
-        for item in evidence_cards
-        if str(item.get("text") or "").strip()
-        and str(item.get("source_file") or "") == "cover_letter_evidence.md"
-        and not is_dirty_cover_letter_text(str(item.get("text") or ""))
-    ]
-    polished_evidence = [polish_evidence_clause(item) for item in evidence_texts]
-    polished_evidence = [
-        item
-        for item in polished_evidence
-        if is_safe_cover_letter_evidence_fragment(item) and not lint_cover_letter_text(item)
-    ]
-
-    if polished_evidence:
-        second_paragraph = (
-            "One example is my work on "
-            f"{polished_evidence[0]}, which gave me practice translating business rules into dependable application behavior. "
-            "That experience also required validation through tests, clear handoff to teammates, and maintainable changes that fit day-to-day use."
-        )
-    else:
-        second_paragraph = evidence_fragment_to_sentence(
-            "feature contributions, testing-focused improvements, and workflow refinements that required careful validation, clear handoff to teammates, and maintainable changes"
-        )
-
     letter = (
         "Dear Hiring Manager,\n\n"
-        f"I am applying for the {role_title} position at {company}. My background in {stack} aligns with {company}'s focus on application services and internal platforms. "
-        f"I would bring experience from business application work that combines C#/.NET development, SQL-backed functionality, and day-to-day support for shared internal systems.\n\n"
-        "In recent development work, I have contributed to internal and enterprise-grade systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. "
-        f"{second_paragraph}\n\n"
-        f"What interests me about this role is the mix of software delivery, stakeholder support, and steady improvement of business applications. I work best by clarifying requirements, communicating directly with teammates, and keeping implementation choices understandable within {company}'s platform environment. I also value direct collaboration with the people involved in the work so priorities, tradeoffs, and delivery expectations stay clear throughout a project.\n\n"
-        f"Thank you for your consideration. I would welcome a conversation about how my C#/.NET application experience can support {company}'s team. I would also value the opportunity to discuss how I could contribute to the role's mix of application development, support, and steady product improvement.\n\n"
+        f"I am applying for the {role_title} position at {company}. My background in C#, .NET Core, SQL, and enterprise application development aligns with {company}'s focus on maintaining and improving application services and internal platforms.\n\n"
+        "In recent development work, I have contributed to business-facing systems by implementing features, writing unit tests, improving workflow behavior, and working through pull-request-based development. That experience has given me practice translating requirements into maintainable application behavior, validating changes carefully, and handing off work clearly so teammates can continue building on it.\n\n"
+        f"What interests me about this role is the mix of software delivery, stakeholder support, and steady improvement of business applications. I would bring clear implementation habits, testing discipline, and a practical approach to supporting {company}'s platform environment as I ramp into the team's specific tools and workflows. I also value direct collaboration with stakeholders so priorities and implementation expectations remain clear through delivery.\n\n"
+        f"Thank you for your consideration. I would welcome a conversation about how my C#/.NET application experience can support {company}'s team.\n\n"
         "Best regards,\n\n"
         "Vincent Morrill"
     )
